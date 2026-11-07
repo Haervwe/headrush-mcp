@@ -60,7 +60,10 @@ It talks to the Remote Editor built into the pedal, over your home network. It r
 | `get_status` | Firmware, loaded rig, unsaved-edit flag, DSP load |
 | `list_rigs`, `list_setlists`, `get_setlist` | Browse your library |
 | `get_current_rig` | Loaded rig's routing, mix and chain |
-| `get_footswitches` | Footswitch assignments and scenes |
+| `get_footswitches` | Footswitch summary |
+| `get_scene` | One scene's blocks, A/B doubling, path, presets and color |
+| `get_footswitch_settings` | Global tuner, looper and auto-assign settings |
+| `get_rig_spec_format` | The `create_rig` spec format, also available as a resource |
 | `find_models` | Search blocks, models and installed files by name or by the gear they're inspired by ([details](#finding-models)) |
 | `list_blocks`, `list_block_presets` | Available blocks and their presets |
 | `get_block`, `describe_block` | A block's values and parameter schema |
@@ -75,7 +78,7 @@ It talks to the Remote Editor built into the pedal, over your home network. It r
 | `set_footswitch`, `set_scene` | Assign footswitches and scenes | No |
 | `activate_scene` | Fire a scene | No |
 | `load_rig` | Switch rigs | No |
-| `create_rig` | Build, verify and save a rig from a [spec](docs/rig-specs.md) | Yes, as a new rig |
+| `create_rig` | Build, verify and save a rig from a [spec](src/headrush_mcp/rig-specs.md) | Yes, as a new rig |
 | `save_rig_as_new` | Save under a new name | Yes, as a new rig |
 | `save_loaded_rig` | Overwrite the loaded rig's saved copy | **Yes, overwrites** |
 
@@ -143,7 +146,7 @@ Tests use a simulated pedal and don't touch your network. See [`docs/api.md`](do
 
 - State is read over REST. The pedal's WebSocket push isn't used yet.
 - A rig can only be inspected once it's loaded, because no read-only way to fetch an unloaded rig has been found.
-- Only Toggle footswitches and single-state scenes are supported.
+- Only Toggle footswitches and single-state scenes are tested. A scene's second state and MIDI out can't be set, and the active A/B side can't be read.
 - The catalog was built for firmware `5.2.0.2a405ee`, and writing a clone, NAM, IR or reverb file to a block hasn't been tested yet.
 
 ## Thanks

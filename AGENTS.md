@@ -20,7 +20,7 @@ This server can change a real pedal that someone may be playing. It's meant to b
 - Other clients and the footswitches can change state at any time, so re-read state rather than assuming it.
 - You can verify settings, but not sound. Don't claim a tone is right; ask the user to listen.
 
-See `docs/api.md` for the API and `docs/rig-specs.md` for the spec format.
+See `docs/api.md` for the API and `src/headrush_mcp/rig-specs.md` for the spec format.
 
 ## Before committing
 

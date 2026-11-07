@@ -1,6 +1,6 @@
 # Rig specs
 
-`create_rig` builds a new rig from a JSON spec. Empty slots are cleared, so list everything you want.
+`create_rig` builds a new rig from a JSON spec. Empty slots are cleared, so list everything you want. Unknown keys are refused, except comments that start with `_`.
 
 ```json
 {
@@ -26,7 +26,7 @@
 | `blocks` | Yes | Blocks by `slot` (1-14), with optional `params` |
 | `footswitches` | No | By switch number (1-6) |
 
-Parameter names and option indexes vary by block, so use `describe_block` to find them. For example, `Type` on `Amp` is an index into its list of models. Numbers are normalized 0-1, and the [API reference](api.md) explains converting them.
+Parameter names and option indexes vary by block, so use `describe_block` to find them. For example, `Type` on `Amp` is an index into its list of models. Numbers are normalized 0-1, and the [API reference](../../docs/api.md) explains converting them.
 
 ## Routings
 
@@ -51,7 +51,7 @@ Use a split routing, with `Amp` and `Cab` on path A and `Amp 2` and `Cab 2` on p
 | `ParaDelay` | -30000 to +30000 µs | `0.5` is no delay |
 | `ParaXFade` | -100 to +100 | `0.5` is an even blend |
 
-See [`rigs/stern-stereo-test.json`](../rigs/stern-stereo-test.json) for a full example. The `Amp` and `Cab` blocks can also double in place using their `Doubling` and `DoubleMode` parameters, but `create_rig` hasn't been tested with that.
+See [`rigs/stern-stereo-test.json`](../../rigs/stern-stereo-test.json) for a full example. The `Amp` and `Cab` blocks can also double in place using their `Doubling` and `DoubleMode` parameters, but `create_rig` hasn't been tested with that.
 
 Check the sound in mono if you pan hard, as it depends on how your output is connected.
 
@@ -63,17 +63,39 @@ Check the sound in mono if you pan hard, as it depends on how your output is con
 { "module": "S1 Drive", "operation": "On", "name": "" }
 ```
 
-`operation` defaults to `On`. `name` overrides the label shown on the pedal.
+`operation` defaults to `On`. `name` overrides the label shown on the pedal. `mode` can be `1` for hold, which hasn't been tested.
 
-**Scene:** sets several blocks at once. Blocks you don't list stay unchanged.
+**Scene:** sets several things at once with one press.
 
 ```json
-{ "scene": { "name": "SOLO", "blocks": { "S1 Drive": "on", "AIR Delay 2": "off" } } }
+{
+  "scene": {
+    "name": "SOLO",
+    "blocks": { "S1 Drive": "on", "AIR Delay 2": "off", "Chorus": "nochange" },
+    "doubling": "B",
+    "path": "nochange",
+    "presets": { "S1 Drive": "My Lead" },
+    "color": 5
+  }
+}
 ```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `name` | Yes | The label on the pedal |
+| `blocks` | Yes in a spec | Blocks in the chain as `on`, `off` or `nochange`. Blocks you don't list become `nochange` |
+| `doubling` | No | `A`, `B` or `nochange`, for blocks with `Doubling` on and `DoubleMode` set to Switch |
+| `path` | No | `A`, `B` or `nochange`, for split routings |
+| `presets` | No | A block preset to recall, from `list_block_presets`. `No Preset` clears one |
+| `color` | No | The scene's color, 0-13. The editor shows color 1 onward, and names for the numbers haven't been mapped |
+
+`create_rig` adds a `warnings` list if `doubling` or `path` would do nothing on that rig.
 
 Scene names display in capitals on the official editor, so use capitals for consistency.
 
-Switches 1-3 and 4-6 are separate banks.
+`set_scene` takes the same fields, and `get_scene` returns them. With `set_scene`, `blocks` is optional, and anything you leave out keeps its current value, so you can change just `doubling`. A scene's second switch state and MIDI out can't be set here. Do those on the pedal.
+
+Switches 1-3 and 4-6 are separate banks, and each switch has its own scene. Two switches with the same label can still behave differently, so check both.
 
 ## If a build fails
 

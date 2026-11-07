@@ -14,7 +14,16 @@ _SETTLE_SECONDS = 1.5
 _MODE_TOGGLE = 0
 _MODE_SCENE = 2
 _NO_CHANGE = 0
-_SCENE_STATES = {"on": 1, "off": 2}
+_NO_PRESET = "No Preset"
+_EMPTY_SLOT = "Empty Slot"
+_MAX_COLOUR = 13
+_SCENE_STATES = {"on": 1, "off": 2, "nochange": _NO_CHANGE}
+_SCENE_SIDES = {"A": 1, "B": 2, "nochange": _NO_CHANGE}
+_SPEC_HELP = "See get_rig_spec_format for the format."
+_SPEC_KEYS = {"name", "routing", "mix", "blocks", "footswitches"}
+_BLOCK_KEYS = {"slot", "block", "params"}
+_STOMP_KEYS = {"module", "operation", "name", "mode"}
+_SCENE_KEYS = {"name", "blocks", "doubling", "path", "presets", "color"}
 
 ROUTINGS = [
     {"routing": 0, "name": "Straight Path", "before_split": "1-14", "path_a": None, "path_b": None, "after_mix": None},
@@ -61,6 +70,12 @@ def apply_rig(
             raise HeadRushError(f"Unknown block: {block}")
         chain_values[f"ModuleType{slot}"] = types.index(block)
 
+    # Everything that can be refused is checked before the pedal changes.
+    switch_values = footswitch_values(spec)
+    scenes = [s["scene"] for s in spec.get("footswitches", {}).values() if "scene" in s]
+    for scene in scenes:
+        check_scene_presets(client, scene)
+
     if not resume_draft and client.call(RIGS, "makeNewRigConfirm", [-1]) is False:
         raise HeadRushError("The device refused to create a new rig")
 
@@ -70,23 +85,122 @@ def apply_rig(
             expected.append((block_path(entry["block"]), entry["params"]))
     if spec.get("mix"):
         expected.append((block_path("Mix"), spec["mix"]))
-    expected += [(FOOTSWITCH, values) for values in footswitch_values(spec)]
+    expected += [(FOOTSWITCH, values) for values in switch_values]
 
     mismatches = _write_until_stable(client, expected, sleep)
     saved = False
     if save and not mismatches:
         saved = client.call(RIGS, "saveRigAs", [name, -1]) is not False
+    warnings = sorted({w for scene in scenes for w in scene_warnings(client, scene)})
     return {
         "name": name,
         "saved": saved,
         "mismatches": mismatches,
+        "warnings": warnings,
         "chain": client.current_chain(),
         "status": client.status(),
     }
 
 
+def _check_keys(found: Any, allowed: set[str], where: str) -> None:
+    """Refuse keys we'd otherwise ignore. Keys starting with _ are comments."""
+    unknown = sorted(str(k) for k in found if not str(k).startswith("_") and k not in allowed)
+    if unknown:
+        raise HeadRushError(
+            f"Unknown {where} keys: {unknown}. Allowed: {sorted(allowed)}. {_SPEC_HELP}"
+        )
+
+
+def check_scene(number: Any, scene: Any, require_blocks: bool = True) -> None:
+    """Reject a malformed scene with a readable reason, before touching the pedal."""
+    if str(number) not in {"1", "2", "3", "4", "5", "6"}:
+        raise HeadRushError(f"Footswitch must be 1-6: {number!r}")
+    if not isinstance(scene, dict):
+        raise HeadRushError(f"Scene on footswitch {number} must be an object. {_SPEC_HELP}")
+    _check_keys(scene, _SCENE_KEYS, f"scene (footswitch {number})")
+    if not scene.get("name"):
+        raise HeadRushError(f"Scene on footswitch {number} needs 'name' and 'blocks'")
+    blocks = scene.get("blocks")
+    if blocks is None and require_blocks or blocks is not None and not isinstance(blocks, dict):
+        raise HeadRushError(f"Scene on footswitch {number} needs 'name' and 'blocks'")
+    bad = {s for s in (blocks or {}).values() if s not in _SCENE_STATES}
+    if bad:
+        raise HeadRushError(
+            f"Scene block states must be 'on', 'off' or 'nochange': {sorted(map(str, bad))}"
+        )
+    for key in ("doubling", "path"):
+        if key in scene and scene[key] not in _SCENE_SIDES:
+            raise HeadRushError(f"Scene {key} must be 'A', 'B' or 'nochange': {scene[key]!r}")
+    presets = scene.get("presets", {})
+    if not isinstance(presets, dict) or not all(isinstance(p, str) for p in presets.values()):
+        raise HeadRushError(f"Scene presets must map block names to preset names: {presets!r}")
+    color = scene.get("color", 0)
+    if not isinstance(color, int) or isinstance(color, bool) or not 0 <= color <= _MAX_COLOUR:
+        raise HeadRushError(f"Scene color must be 0-{_MAX_COLOUR}: {color!r}")
+
+
+def check_scene_presets(client: HeadRushClient, scene: dict[str, Any]) -> None:
+    """Refuse presets the block doesn't have. 'No Preset' clears a block's recall."""
+    for block, preset in (scene.get("presets") or {}).items():
+        if preset != _NO_PRESET and preset not in client.call(BLOCKS, "blockPresets", [block]):
+            raise HeadRushError(
+                f"{block} has no preset named '{preset}'. See list_block_presets."
+            )
+
+
+def scene_warnings(client: HeadRushClient, scene: dict[str, Any]) -> list[str]:
+    """Explain scene settings the pedal accepts but that won't do anything."""
+    warnings = []
+    if scene.get("doubling", "nochange") != "nochange":
+        if not client.get_properties(FOOTSWITCH).get("AnySwitchDoubling"):
+            warnings.append(
+                "No block is switching between A and B, so 'doubling' has no effect. "
+                "Set Doubling on and DoubleMode to Switch on an Amp or Cab."
+            )
+    if scene.get("path", "nochange") != "nochange":
+        if not client.get_properties(CHAIN).get("Routing"):
+            warnings.append("'path' has no effect on a Straight Path routing.")
+    return warnings
+
+
+def read_scene(client: HeadRushClient, switch: int) -> dict[str, Any]:
+    """Read a scene in the same shape set_scene and rig specs use."""
+    if switch not in range(1, 7):
+        raise HeadRushError(f"Footswitch must be 1-6: {switch!r}")
+    fs = client.get_properties(FOOTSWITCH)
+    if fs.get(f"ModeNew{switch}") != _MODE_SCENE:
+        raise HeadRushError(f"Footswitch {switch} isn't a scene")
+    states = {value: name for name, value in _SCENE_STATES.items()}
+    sides = {value: name for name, value in _SCENE_SIDES.items()}
+    blocks = {}
+    presets = {}
+    for slot in range(1, 15):
+        block = fs.get(f"Scene{switch}_{slot}_Effect")
+        if not block or block == _EMPTY_SLOT:
+            continue
+        blocks[block] = states.get(fs.get(f"Scene{switch}_{slot}_Mode"), "nochange")
+        preset = fs.get(f"Scene{switch}Slot{slot}Preset")
+        if preset and preset != _NO_PRESET:
+            presets[block] = preset
+    return {
+        "switch": switch,
+        "name": fs.get(f"UserFootSwitchText{switch}") or fs.get(f"FootSwitchText{switch}"),
+        "active": fs.get(f"SceneActive{switch}"),
+        "blocks": blocks,
+        "doubling": sides.get(fs.get(f"SceneDoubleSwitch{switch}"), "nochange"),
+        "path": sides.get(fs.get(f"ScenePathSwitch{switch}"), "nochange"),
+        "presets": presets,
+        "color": fs.get(f"MacroColour{switch}"),
+        "midi_out": fs.get(f"SceneMIDIOut{switch}"),
+        "states": fs.get(f"SceneNumberOfStates{switch}"),
+    }
+
+
 def _check_spec(spec: dict[str, Any]) -> None:
     """Reject malformed specs with a readable reason, before touching the pedal."""
+    if "scenes" in spec:
+        raise HeadRushError(f"Scenes go under footswitches.<number>.scene. {_SPEC_HELP}")
+    _check_keys(spec, _SPEC_KEYS, "spec")
     if not isinstance(spec.get("name"), str) or not spec["name"].strip():
         raise HeadRushError("Spec needs a non-empty 'name'")
     blocks = spec.get("blocks")
@@ -96,6 +210,7 @@ def _check_spec(spec: dict[str, Any]) -> None:
     for entry in blocks:
         if not isinstance(entry, dict) or "slot" not in entry or "block" not in entry:
             raise HeadRushError(f"Each block needs 'slot' and 'block': {entry!r}")
+        _check_keys(entry, _BLOCK_KEYS, f"block ({entry['block']})")
         if not isinstance(entry["slot"], int) or not 1 <= entry["slot"] <= 14:
             raise HeadRushError(f"Slot must be 1-14: {entry['slot']!r}")
         slots.append(entry["slot"])
@@ -104,38 +219,55 @@ def _check_spec(spec: dict[str, Any]) -> None:
     for number, switch in spec.get("footswitches", {}).items():
         if str(number) not in {"1", "2", "3", "4", "5", "6"}:
             raise HeadRushError(f"Footswitch must be 1-6: {number!r}")
+        if not isinstance(switch, dict):
+            raise HeadRushError(f"Footswitch {number} must be an object. {_SPEC_HELP}")
         if "scene" in switch:
-            scene = switch["scene"]
-            if not scene.get("name") or not isinstance(scene.get("blocks"), dict):
-                raise HeadRushError(f"Scene on footswitch {number} needs 'name' and 'blocks'")
-            bad = {s for s in scene["blocks"].values() if s not in _SCENE_STATES}
-            if bad:
-                raise HeadRushError(f"Scene block states must be 'on' or 'off': {sorted(map(str, bad))}")
-        elif "module" not in switch:
+            _check_keys(switch, {"scene"}, f"footswitch {number}")
+            check_scene(number, switch["scene"])
+        elif "module" in switch:
+            _check_keys(switch, _STOMP_KEYS, f"footswitch {number}")
+        else:
             raise HeadRushError(f"Footswitch {number} needs 'module' or 'scene'")
+
+
+def _scene_values(number: Any, scene: dict[str, Any], slots: dict[str, int]) -> dict[str, Any]:
+    def slot_of(block: str) -> int:
+        if block not in slots:
+            raise HeadRushError(f"Scene {scene['name']} uses a block not in the chain: {block}")
+        return slots[block]
+
+    values: dict[str, Any] = {
+        f"ModeNew{number}": _MODE_SCENE,
+        f"UserFootSwitchText{number}": scene["name"],
+    }
+    if scene.get("blocks") is not None:
+        for slot in slots.values():
+            values[f"Scene{number}_{slot}_Mode"] = _NO_CHANGE
+        for block, state in scene["blocks"].items():
+            values[f"Scene{number}_{slot_of(block)}_Mode"] = _SCENE_STATES[state]
+    for block, preset in (scene.get("presets") or {}).items():
+        values[f"Scene{number}Slot{slot_of(block)}Preset"] = preset
+    if "doubling" in scene:
+        values[f"SceneDoubleSwitch{number}"] = _SCENE_SIDES[scene["doubling"]]
+    if "path" in scene:
+        values[f"ScenePathSwitch{number}"] = _SCENE_SIDES[scene["path"]]
+    if "color" in scene:
+        values[f"MacroColour{number}"] = scene["color"]
+    return values
 
 
 def footswitch_values(spec: dict[str, Any]) -> list[dict[str, Any]]:
     """Turn a spec's footswitches into property writes, one dict per switch.
 
-    A switch is either a stomp (`module`) or a scene (`scene`). A scene sets the
-    listed blocks on or off and leaves the rest of the chain unchanged.
+    A switch is either a stomp (`module`) or a scene (`scene`). A scene's `blocks`
+    replaces its whole on/off map, and blocks it doesn't list become no change.
+    Other scene settings are only written when present.
     """
     slots = {entry["block"]: entry["slot"] for entry in spec["blocks"]}
     result = []
     for number, switch in sorted(spec.get("footswitches", {}).items()):
         if "scene" in switch:
-            scene = switch["scene"]
-            values: dict[str, Any] = {
-                f"ModeNew{number}": _MODE_SCENE,
-                f"UserFootSwitchText{number}": scene["name"],
-            }
-            for slot in slots.values():
-                values[f"Scene{number}_{slot}_Mode"] = _NO_CHANGE
-            for block, state in scene["blocks"].items():
-                if block not in slots:
-                    raise HeadRushError(f"Scene {scene['name']} uses a block not in the chain: {block}")
-                values[f"Scene{number}_{slots[block]}_Mode"] = _SCENE_STATES[state]
+            values = _scene_values(number, switch["scene"], slots)
         else:
             values = {
                 f"ModeNew{number}": switch.get("mode", _MODE_TOGGLE),
@@ -163,7 +295,7 @@ def _write_until_stable(
         pending = _differences(client, expected)
         if not pending:
             return []
-    return _verify(client, expected)
+    return find_mismatches(client, expected)
 
 
 def _differences(
@@ -184,7 +316,9 @@ def _same(got: Any, wanted: Any) -> bool:
     return got == wanted
 
 
-def _verify(client: HeadRushClient, expected: list[tuple[str, dict[str, Any]]]) -> list[str]:
+def find_mismatches(
+    client: HeadRushClient, expected: list[tuple[str, dict[str, Any]]]
+) -> list[str]:
     problems = []
     for path, values in _differences(client, expected):
         actual = client.get_properties(path)

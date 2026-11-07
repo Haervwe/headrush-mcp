@@ -114,8 +114,21 @@ Keys on `/Evil/Engine/FootSwitch`, for switch `n` from 1 to 6:
 | `FootSwitchText<n>` | Label shown, read-only in practice |
 | `Scene<n>_<slot>_Mode` | `0` no change, `1` on, `2` off |
 | `SceneActive<n>` | Write `true` to fire a scene |
+| `Scene<n>_<slot>_Effect` | The block in that slot, read-only in practice |
+| `SceneDoubleSwitch<n>`, `ScenePathSwitch<n>` | `0` no change, `1` A, `2` B |
+| `Scene<n>Slot<slot>Preset` | Block preset to recall, or `No Preset` |
+| `MacroColour<n>` | Scene color, 0-13 |
+| `SceneMIDIOut<n>` | MIDI out, format not yet checked |
+| `SceneNumberOfStates<n>`, `SceneState<n>` | Number of switch states, and the current one |
+| `AnySwitchDoubling` | Whether any block is switching A/B. The editor disables a scene's doubling control without it |
 
 Switches 1-3 and 4-6 appear as separate banks. Scenes also have a second state (`State2...` keys and `createNewSceneState`), which this server doesn't use.
+
+The pedal keeps the old `Module<n>` and `Operation<n>` when a switch becomes a scene, so ignore them on scene switches.
+
+On `Amp` and `Cab`, `Doubling` turns doubling on, and `DoubleMode` true means Switch rather than Stereo. No field reporting the active A/B side has been found, though `LastScene` gives the last scene fired, counting from 0.
+
+Global settings are on `/Evil/Engine/Settings/General`, including `TunerFSAssignment`, `LooperFSAssignment` and `AutoAssignments`. They affect every rig, and this server only reads them.
 
 ## State-changing methods to be careful with
 
@@ -123,6 +136,8 @@ Switches 1-3 and 4-6 appear as separate banks. Scenes also have a second state (
 - **Setlists:** `loadSetlist`, `saveSetlist`, `deleteSetlist`
 - **Cloud and Tone3000:** `uploadRig`, `uploadClone`, `downloadRig`, `downloadModelToDevice`
 - **Drums:** `togglePlay`
+
+`loadRigConfirm` on a rig with unsaved edits doesn't load anything, though it still returns `true`. It sets `displayDialog` on `/Evil/API/RigSaveDialog`, and the editor then calls `save`, `saveRigAs`, `discard` or `cancel`. `discard` throws away the unsaved rig and finishes the load. This server doesn't expose those calls, and its `load_rig` refuses unsaved rigs first. The dialog later cleared by itself in one test.
 
 Clicking a rig in the official editor's list may load it. The editor's own startup also calls cloud and Tone3000 lookups.
 

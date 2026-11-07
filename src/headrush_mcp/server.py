@@ -22,7 +22,16 @@ from .client import (
     HeadRushError,
     block_path,
 )
-from .rigs import ROUTINGS, apply_rig, footswitch_values
+from .rigs import (
+    ROUTINGS,
+    apply_rig,
+    check_scene,
+    check_scene_presets,
+    find_mismatches,
+    footswitch_values,
+    read_scene,
+    scene_warnings,
+)
 
 mcp = MCPServer("headrush")
 client = HeadRushClient(
@@ -30,7 +39,11 @@ client = HeadRushClient(
     allow_writes=os.environ.get("HEADRUSH_ALLOW_WRITES") == "1",
 )
 _MIX = block_path("Mix")
+_GENERAL_SETTINGS = "/Evil/Engine/Settings/General"
 _LABEL_UPDATE_SECONDS = 1.0  # The pedal updates footswitch labels shortly after a write.
+_RIG_SPEC_FORMAT = Path(__file__).with_name("rig-specs.md")
+_SWITCH_TYPES = {0: "toggle", 1: "hold", 2: "scene"}
+_SCENE_SIDES = {0: "nochange", 1: "A", 2: "B"}
 
 
 @mcp.tool()
@@ -126,20 +139,62 @@ def list_block_presets(block: str) -> list[str]:
 
 @mcp.tool()
 def get_footswitches() -> list[dict[str, Any]]:
-    """Summarise footswitches. Switches 1-3 and 4-6 are separate banks."""
+    """Summarise footswitches. Switches 1-3 and 4-6 are separate banks.
+
+    Scene switches show doubling and path; use get_scene for the rest. The pedal keeps an old
+    module and operation on scene switches, so those only appear on toggle and hold switches.
+    """
     fs = client.get_properties(FOOTSWITCH)
-    return [
-        {
+    summary = []
+    for n in range(1, 7):
+        kind = _SWITCH_TYPES.get(fs.get(f"ModeNew{n}"))
+        entry: dict[str, Any] = {
             "switch": n,
-            "type": {0: "toggle", 1: "hold", 2: "scene"}.get(fs.get(f"ModeNew{n}")),
-            "module": fs.get(f"Module{n}"),
-            "operation": fs.get(f"Operation{n}"),
+            "type": kind,
             "label": fs.get(f"FootSwitchText{n}"),
             "on": fs.get(f"FootSwitchOn{n}"),
-            "scene_active": fs.get(f"SceneActive{n}"),
         }
-        for n in range(1, 7)
-    ]
+        if kind == "scene":
+            entry["scene_active"] = fs.get(f"SceneActive{n}")
+            entry["doubling"] = _SCENE_SIDES.get(fs.get(f"SceneDoubleSwitch{n}"), "nochange")
+            entry["path"] = _SCENE_SIDES.get(fs.get(f"ScenePathSwitch{n}"), "nochange")
+        else:
+            entry["module"] = fs.get(f"Module{n}")
+            entry["operation"] = fs.get(f"Operation{n}")
+        summary.append(entry)
+    return summary
+
+
+@mcp.tool()
+def get_scene(switch: int) -> dict[str, Any]:
+    """Read a scene on footswitch 1-6: blocks, doubling, path, presets, color and MIDI out.
+
+    Uses the same shape as set_scene. `states` of 2 means the switch also has a second state,
+    which this server can't read or change. The pedal doesn't report which A/B side is active.
+    """
+    return read_scene(client, switch)
+
+
+@mcp.tool()
+def get_footswitch_settings() -> dict[str, Any]:
+    """Read global settings that affect every rig: tuner and looper switch behaviour and more.
+
+    This server can't change them, so do that on the pedal.
+    """
+    values = client.get_properties(_GENERAL_SETTINGS)
+    properties = client.get_meta(_GENERAL_SETTINGS).get("properties") or {}
+
+    def option(key: str) -> Any:
+        names = ((properties.get(key) or {}).get("x-options") or {}).get("strings") or []
+        value = values.get(key)
+        return names[value] if isinstance(value, int) and value < len(names) else value
+
+    return {
+        "tuner_switch": option("TunerFSAssignment"),
+        "looper_switch": option("LooperFSAssignment"),
+        "auto_assign_footswitches": values.get("AutoAssignments"),
+        "on_press": values.get("OnPressFS"),
+    }
 
 
 @mcp.tool()
@@ -194,12 +249,39 @@ def set_footswitch(switch: int, module: str, operation: str = "On", name: str = 
 
 
 @mcp.tool()
-def set_scene(switch: int, name: str, blocks: dict[str, str]) -> list[dict[str, Any]]:
-    """Make footswitch 1-6 a scene, without saving.
+def set_scene(
+    switch: int,
+    name: str,
+    blocks: dict[str, str] | None = None,
+    doubling: str | None = None,
+    path: str | None = None,
+    presets: dict[str, str] | None = None,
+    color: int | None = None,
+) -> dict[str, Any]:
+    """Make footswitch 1-6 a scene, or edit one, without saving. Reads the result back.
 
-    `blocks` maps block names in the chain to "on" or "off". Others stay unchanged.
+    `blocks` maps blocks in the chain to "on", "off" or "nochange", and replaces the scene's
+    whole map: blocks it doesn't list become "nochange". `doubling` and `path` are "A", "B" or
+    "nochange". `presets` maps blocks to a preset to recall, or "No Preset" to clear one.
+    `color` is 0-13. Anything you leave out keeps its current value.
+
+    Check `mismatches` and `warnings` in the result. Second switch states aren't supported.
     """
-    return _write_switch(switch, {"scene": {"name": name, "blocks": blocks}})
+    optional = {"blocks": blocks, "doubling": doubling, "path": path, "presets": presets, "color": color}
+    scene = {"name": name} | {key: value for key, value in optional.items() if value is not None}
+    check_scene(switch, scene, require_blocks=False)
+    check_scene_presets(client, scene)
+    values = footswitch_values(
+        {"blocks": client.current_chain(), "footswitches": {str(switch): {"scene": scene}}}
+    )[0]
+    for key, value in values.items():
+        client.set_properties(FOOTSWITCH, {key: value})
+    time.sleep(_LABEL_UPDATE_SECONDS)
+    return {
+        "scene": read_scene(client, switch),
+        "mismatches": find_mismatches(client, [(FOOTSWITCH, values)]),
+        "warnings": scene_warnings(client, scene),
+    }
 
 
 @mcp.tool()
@@ -235,6 +317,18 @@ def save_loaded_rig(expected_name: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def get_rig_spec_format() -> str:
+    """Get the create_rig spec format, including footswitches, scenes and routings."""
+    return _RIG_SPEC_FORMAT.read_text(encoding="utf-8")
+
+
+@mcp.resource("headrush://docs/rig-specs", mime_type="text/markdown")
+def rig_spec_format() -> str:
+    """The create_rig spec format, for clients that read resources."""
+    return get_rig_spec_format()
+
+
+@mcp.tool()
 def create_rig(
     spec: dict[str, Any] | None = None,
     spec_path: str | None = None,
@@ -243,9 +337,10 @@ def create_rig(
 ) -> dict[str, Any]:
     """Build a new rig from a spec, verify it, and save it only if everything matches.
 
-    Pass `spec` or a local JSON `spec_path`; docs/rig-specs.md has the format. Refused if
-    the name exists or the loaded rig has unsaved edits. If a build fails, retry with
-    `resume_draft` to reuse the unnamed draft it left, which overwrites that draft.
+    Pass `spec` or a local JSON `spec_path`; get_rig_spec_format has the format, including
+    scenes. Unknown keys are refused. Refused if the name exists or the loaded rig has unsaved
+    edits. If a build fails, retry with `resume_draft` to reuse the unnamed draft it left,
+    which overwrites that draft.
     """
     if (spec is None) == (spec_path is None):
         raise HeadRushError("Pass exactly one of spec or spec_path")

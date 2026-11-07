@@ -39,8 +39,10 @@ WRITE_METHODS = {
 
 _CHAIN_KEY = re.compile(r"^(ModuleType([1-9]|1[0-4])|Routing)$")
 _FOOTSWITCH_KEY = re.compile(
-    r"^(Module|Operation|ModeNew|UserFootSwitchText|SceneActive)[1-6]$"
+    r"^(Module|Operation|ModeNew|UserFootSwitchText|SceneActive"
+    r"|SceneDoubleSwitch|ScenePathSwitch|MacroColour)[1-6]$"
     r"|^Scene[1-6]_([1-9]|1[0-4])_Mode$"
+    r"|^Scene[1-6]Slot([1-9]|1[0-4])Preset$"
 )
 # Block names can contain apostrophes and parentheses, as in Sher'ff and IR (1024).
 _READ_PATH = re.compile(r"^/Evil/(API|Cloud|Engine|Gui)(/[\w\-'()]+)*$")
