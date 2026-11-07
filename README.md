@@ -18,7 +18,7 @@ It talks to the Remote Editor built into the pedal, over your home network. It r
 1. Get the code and install it:
 
    ```bash
-   git clone <this repository>
+   git clone https://github.com/Haervwe/headrush-mcp.git
    cd headrush-mcp
    uv sync
    ```
