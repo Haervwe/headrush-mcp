@@ -2,7 +2,7 @@
 
 A rig inspired by Pat Metheny's sound on "Follow Me", from *Imaginary Day* (1997).
 
-**This is an informed approximation, and it hasn't been checked by ear yet.** No source was found for the patch on this recording, and a modeler's synth block isn't a Roland GR-300.
+**This is an informed approximation.** No source was found for the patch on this recording, and a modeler's synth block isn't a Roland GR-300. The repo owner raised the amp gain by ear because the level was too low, and saved it starting on `BLEND`. Other settings are as first built.
 
 Spec: [`metheny-follow-me.json`](../rigs/metheny-follow-me.json)
 
@@ -27,7 +27,7 @@ Routing is Middle Split 3-4-3, with `Mix` panning path A hard left and path B ha
 | Before split | Hybrid | GR-300 lead | Saw, Detune 1, 12 dB filter, Cutoff 55%, Filter depth 35%, no dry |
 | Before split | Hybrid 2 | Blended version | As above, with Dry 70% and Synth 45% |
 | Path A | Detune | Prime-Time delay | 14 ms, -3, Mix 50%, no feedback |
-| Path A | Amp, `67 Black Duo` | Clean amp | Gain 20%, Bass 50%, Mid 45%, Treble 40%, Bright off |
+| Path A | Amp, `67 Black Duo` | Clean amp | Gain 50%, Bass 50%, Mid 45%, Treble 40%, Bright off |
 | Path A | Cab, `2x12 Black Panel Duo` | | Dyn 57, on axis |
 | Path B | Detune 2 | Prime-Time delay | 26 ms, +3, Mix 50%, no feedback |
 | Path B | Amp 2, `67 Black Duo` | Clean amp | Same as path A |
@@ -44,6 +44,7 @@ Routing is Middle Split 3-4-3, with `Mix` panning path A hard left and path B ha
 | No feedback, about 50% mix | [A fan recipe](https://forum.fractalaudio.com/threads/getting-the-elusive-pat-metheny-es175-tone.91044/), not Metheny's settings |
 | Small pitch offset | Players describe a slight sweep on the Prime-Time. The Detune block's fixed offset only approximates it, and the ±3 is a guess |
 | Clean amps | His [GR-300 setups](https://killerguitarrigs.com/heres-what-pat-methenys-synth-guitar-is-really-like/) reportedly use clean amp models. The specific amp here is a stand-in |
+| Amp gain | Set by ear on one setup |
 | Synth settings, amp EQ, delay and reverb | **Guesses**, to tune by ear |
 
 ## Tuning
