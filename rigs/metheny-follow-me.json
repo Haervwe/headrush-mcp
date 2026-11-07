@@ -1,0 +1,148 @@
+{
+  "name": "Metheny Follow Me",
+  "_notes": "Approximation inspired by Pat Metheny's guitar synth and 14/26 ms split, not measured from the record. Numbers are normalized 0-1. See docs/metheny-follow-me.md.",
+  "routing": 1,
+  "mix": {
+    "Para1Level": 0.75,
+    "Para2Level": 0.75,
+    "Para1Pan": 0.0,
+    "Para2Pan": 1.0,
+    "ParaDelay": 0.5,
+    "ParaXFade": 0.5
+  },
+  "blocks": [
+    {
+      "slot": 1,
+      "block": "Hybrid",
+      "params": {
+        "On": true,
+        "Shape": 0,
+        "Setup": 4,
+        "Octave": 2,
+        "DryVol": 0.0,
+        "SynthVol": 0.6,
+        "FilterMode": 2,
+        "Cutoff": 0.55,
+        "Reso": 0.1,
+        "FiltDepth": 0.35,
+        "Attack": 0.03,
+        "Release": 0.25,
+        "PPTMono": false,
+        "ArpOn": false
+      }
+    },
+    {
+      "slot": 2,
+      "block": "Hybrid 2",
+      "params": {
+        "On": false,
+        "Shape": 0,
+        "Setup": 4,
+        "Octave": 2,
+        "DryVol": 0.7,
+        "SynthVol": 0.45,
+        "FilterMode": 2,
+        "Cutoff": 0.55,
+        "Reso": 0.1,
+        "FiltDepth": 0.35,
+        "Attack": 0.03,
+        "Release": 0.25,
+        "PPTMono": false,
+        "ArpOn": false
+      }
+    },
+    {
+      "slot": 4,
+      "block": "Detune",
+      "params": { "On": true, "Voices": 0, "Detune1": 0.47, "Delay1": 0.0435, "Mix": 0.5 }
+    },
+    {
+      "slot": 5,
+      "block": "Amp",
+      "params": {
+        "On": true,
+        "Type": 15,
+        "Bright": false,
+        "GainA": 0.2,
+        "Bass": 0.5,
+        "Mid": 0.45,
+        "Treble": 0.4,
+        "Presence": 0.4,
+        "Master": 0.5,
+        "Level": 0.45
+      }
+    },
+    {
+      "slot": 6,
+      "block": "Cab",
+      "params": { "On": true, "CabType": 5, "MicType": 1, "OnAxis": true }
+    },
+    {
+      "slot": 8,
+      "block": "Detune 2",
+      "params": { "On": true, "Voices": 0, "Detune1": 0.53, "Delay1": 0.0836, "Mix": 0.5 }
+    },
+    {
+      "slot": 9,
+      "block": "Amp 2",
+      "params": {
+        "On": true,
+        "Type": 15,
+        "Bright": false,
+        "GainA": 0.2,
+        "Bass": 0.5,
+        "Mid": 0.45,
+        "Treble": 0.4,
+        "Presence": 0.4,
+        "Master": 0.5,
+        "Level": 0.45
+      }
+    },
+    {
+      "slot": 10,
+      "block": "Cab 2",
+      "params": { "On": true, "CabType": 7, "MicType": 1, "OnAxis": true }
+    },
+    {
+      "slot": 12,
+      "block": "AIR Delay",
+      "params": {
+        "On": true,
+        "Sync": false,
+        "Delay": 0.09,
+        "Feedback": 0.18,
+        "Mix": 0.1,
+        "Width": 1.0,
+        "Tails": true
+      }
+    },
+    {
+      "slot": 13,
+      "block": "AIR Reverb",
+      "params": { "On": true, "Mode": 1, "Mix": 0.18, "Size": 0.5, "Tails": true }
+    }
+  ],
+  "footswitches": {
+    "1": { "module": "Hybrid", "operation": "On" },
+    "2": { "module": "Hybrid 2", "operation": "On" },
+    "3": { "module": "AIR Delay", "operation": "On" },
+    "4": {
+      "scene": {
+        "name": "SYNTH",
+        "blocks": { "Hybrid": "on", "Hybrid 2": "off", "AIR Delay": "on", "AIR Reverb": "on" }
+      }
+    },
+    "5": {
+      "scene": {
+        "name": "BLEND",
+        "blocks": { "Hybrid": "off", "Hybrid 2": "on", "AIR Delay": "on", "AIR Reverb": "on" }
+      }
+    },
+    "6": {
+      "scene": {
+        "name": "CLEAN",
+        "blocks": { "Hybrid": "off", "Hybrid 2": "off", "AIR Delay": "on", "AIR Reverb": "on" }
+      }
+    }
+  }
+}

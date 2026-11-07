@@ -107,6 +107,7 @@ Starting points in [`rigs/`](rigs/), to adapt with your own ears:
 |---|---|
 | [`stern-stereo-test.json`](rigs/stern-stereo-test.json) | Mike Stern-inspired detune, delay and overdrive on two parallel amps, with scenes ([notes](docs/stern-tipatinas.md)) |
 | [`stern-tipatinas.json`](rigs/stern-tipatinas.json) | The same idea on one amp, using about half the DSP |
+| [`metheny-follow-me.json`](rigs/metheny-follow-me.json) | Pat Metheny-inspired guitar synth over a 14/26 ms split ([notes](docs/metheny-follow-me.md)) |
 
 To try one, ask your assistant to `create_rig` with the file's full path.
 
