@@ -60,11 +60,36 @@ Integers such as `Amp.Type` are indexes into `x-options.strings` in the schema, 
 | `/Evil/API/Rigs` | Rig lists, `loadedID`, `loadedName`, `dirty` |
 | `/Evil/API/Setlists` | Setlist lists |
 | `/Evil/API/Blocks` | `ModuleTypes`, the names indexed by `ModuleType#` |
+| `/Evil/API/FileAccess` | The `ls` method for browsing installed files |
 | `/Evil/Engine/Patch/Chain` | `ModuleType1-14`, `Routing` |
 | `/Evil/Engine/Patch/Mix` | Parallel path level, pan, delay and crossfade |
 | `/Evil/Engine/Patch/<block>` | Block parameters; spaces become underscores |
 | `/Evil/Engine/FootSwitch` | Footswitches and scenes |
 | `/Evil/Engine/CPUMeter` | `CPUTimeSmoothed` |
+
+`ModuleTypes` lists `ReValver Amp 2` and `C-Verb 2`, but neither has an object on firmware `5.2.0.2a405ee`, so reading them returns a 404. Other names can contain apostrophes and parentheses, like `Sher'ff` and `IR (1024)`, which stay as they are in the path.
+
+## Installed models and files
+
+What's installed differs per pedal, because ReValver models, clones, NAM captures and IRs can be downloaded.
+
+**Options:** model lists are in the schema, like `x-options.strings` on `Amp.Type` and `ReValver Amp.Type`. An option's index can differ between pedals, so read it rather than storing it.
+
+**Files:** a file parameter's schema gives its root and type in `x-options`, as `startPath` and `fileType`. `POST .../Evil/API/FileAccess/ls` with `[folder, fileType]` returns the file names directly in that folder, and type `0` returns its subfolders. The editor's file pickers use this call, and files usually sit in subfolders.
+
+| `fileType` | Root | Parameter | Blocks |
+|---|---|---|---|
+| `2` | `Impulse Responses` | `IR` | `IR`, `IR (1024)` |
+| `7` | `Amp Clones` | `LoadedClone` | `Amp Clone`, `Pedal Clone` |
+| `8` | `SuperClones` | `LoadedClone` | `SuperClone` |
+| `9` | `Neural Amp Modeler` | `LoadedClone` | `Neural Amp Modeler` |
+| `12` | `Reverbs` | `ReverbFile` | `C-Verb` |
+
+Going by the editor's JavaScript, a chosen file's value is its path from the root folder, like `Neural Amp Modeler/Tone 3000/Name.nam`. This server hasn't tested writing one yet.
+
+The editor saves Tone3000 downloads to `Neural Amp Modeler/Tone 3000`, and HeadRush Cloud clones to `Amp Clones/HeadRush Cloud` or `SuperClones/HeadRush Cloud`.
+
+`/Evil/API/Blocks/categoryOfBlock` returns a block's category, or an empty string for second instances and a few others.
 
 ## Building a rig
 

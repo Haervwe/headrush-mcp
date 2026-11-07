@@ -21,8 +21,10 @@ CHAIN = "/Evil/Engine/Patch/Chain"
 RIG = "/Evil/Engine/Patch/Rig"
 FOOTSWITCH = "/Evil/Engine/FootSwitch"
 SAVE_DIALOG = "/Evil/API/RigSaveDialog"
+FILES = "/Evil/API/FileAccess"
 
 READ_METHODS = {
+    (FILES, "ls"),  # The official editor's file pickers use this to browse folders.
     (SETLISTS, "getSetlist"),
     (BLOCKS, "blockPresets"),
     (BLOCKS, "categoryBlocks"),
@@ -40,8 +42,9 @@ _FOOTSWITCH_KEY = re.compile(
     r"^(Module|Operation|ModeNew|UserFootSwitchText|SceneActive)[1-6]$"
     r"|^Scene[1-6]_([1-9]|1[0-4])_Mode$"
 )
-_READ_PATH = re.compile(r"^/Evil/(API|Cloud|Engine|Gui)(/[\w\-]+)*$")
-_BLOCK_PATH = re.compile(r"^/Evil/Engine/Patch/[\w\-']+$")
+# Block names can contain apostrophes and parentheses, as in Sher'ff and IR (1024).
+_READ_PATH = re.compile(r"^/Evil/(API|Cloud|Engine|Gui)(/[\w\-'()]+)*$")
+_BLOCK_PATH = re.compile(r"^/Evil/Engine/Patch/[\w\-'()]+$")
 
 
 class HeadRushError(ToolError):

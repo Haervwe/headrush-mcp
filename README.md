@@ -61,6 +61,7 @@ It talks to the Remote Editor built into the pedal, over your home network. It r
 | `list_rigs`, `list_setlists`, `get_setlist` | Browse your library |
 | `get_current_rig` | Loaded rig's routing, mix and chain |
 | `get_footswitches` | Footswitch assignments and scenes |
+| `find_models` | Search blocks, models and installed files by name or by the gear they're inspired by ([details](#finding-models)) |
 | `list_blocks`, `list_block_presets` | Available blocks and their presets |
 | `get_block`, `describe_block` | A block's values and parameter schema |
 | `list_routings` | Signal routings and their slot layouts |
@@ -77,6 +78,15 @@ It talks to the Remote Editor built into the pedal, over your home network. It r
 | `create_rig` | Build, verify and save a rig from a [spec](docs/rig-specs.md) | Yes, as a new rig |
 | `save_rig_as_new` | Save under a new name | Yes, as a new rig |
 | `save_loaded_rig` | Overwrite the loaded rig's saved copy | **Yes, overwrites** |
+
+## Finding models
+
+Block names don't always say what they are, so `find_models` lets your assistant search by real gear. "Klon" finds `K Drive`, and "twin" finds the `67 Black Duo` amp. It combines two sources:
+
+- **A shipped catalog** covers blocks and built-in and ReValver amps, cabs and mics. Categories come from the pedal. What each model is inspired by comes from [Headrush Help](https://headrush-help.vercel.app/), a free community reference by Stefano Luciani and Donato Iacoviello, which also explains each block's controls. Those links are community research, not official information, and aren't endorsed by HeadRush or the gear's makers.
+- **Your pedal** provides what's installed and each option's index, along with your clone, NAM, IR and reverb files.
+
+Anything the catalog doesn't know, like a capture from Tone3000, is still listed, but with `inspired_by` empty. Files are only identified by name, so name them well if you want to search for them. If the pedal isn't reachable, the catalog still answers, with `installed` unknown.
 
 ## Safety
 
@@ -134,6 +144,11 @@ Tests use a simulated pedal and don't touch your network. See [`docs/api.md`](do
 - State is read over REST. The pedal's WebSocket push isn't used yet.
 - A rig can only be inspected once it's loaded, because no read-only way to fetch an unloaded rig has been found.
 - Only Toggle footswitches and single-state scenes are supported.
+- The catalog was built for firmware `5.2.0.2a405ee`, and writing a clone, NAM, IR or reverb file to a block hasn't been tested yet.
+
+## Thanks
+
+To Stefano Luciani and Donato Iacoviello for [Headrush Help](https://headrush-help.vercel.app/). Their research is the source of the catalog's "inspired by" information, and their site is the place to learn what each block's controls do. They aren't involved with this project.
 
 ## License
 

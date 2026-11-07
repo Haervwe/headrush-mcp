@@ -12,6 +12,7 @@ from headrush_mcp.client import (
     HeadRushClient,
     HeadRushError,
     PolicyError,
+    block_path,
 )
 from headrush_mcp.rigs import apply_rig, footswitch_values
 
@@ -303,3 +304,23 @@ def test_bundled_rig_spec_is_well_formed():
     for entry in spec["blocks"]:
         for value in entry["params"].values():
             assert not isinstance(value, float) or 0 <= value <= 1
+
+
+@pytest.mark.parametrize("block", ["Sher'ff", "IR (1024)", "8-Bit Crush"])
+def test_real_block_names_with_punctuation_pass_the_path_check(block):
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"On": False})
+
+    client = HeadRushClient(host="fake", transport=httpx.MockTransport(handler))
+    assert client.get_properties(block_path(block)) == {"On": False}
+    assert seen
+
+
+@pytest.mark.parametrize("path", ["/Evil/Engine/Patch/../Gui", "/Evil/Engine/Patch/a;b", "/Evil/Other"])
+def test_unexpected_paths_are_still_refused(path):
+    client = HeadRushClient(host="fake", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+    with pytest.raises(PolicyError):
+        client.get_properties(path)

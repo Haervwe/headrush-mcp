@@ -10,6 +10,7 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 
+from .catalog import find_models as _find_models
 from .client import (
     BLOCKS,
     CHAIN,
@@ -98,6 +99,23 @@ def describe_block(block: str) -> dict[str, Any]:
 def list_blocks() -> list[str]:
     """List block names usable in a chain slot. Names ending in ' 2' are second instances."""
     return client.get_properties(BLOCKS)["ModuleTypes"]
+
+
+@mcp.tool()
+def find_models(
+    query: str = "", kind: str = "", category: str = "", limit: int = 50
+) -> dict[str, Any]:
+    """Find blocks, models and files by name or by the gear they're inspired by.
+
+    `query` matches words, like "klon", "twin" or "ac30". `kind` is one of block, amp, cab,
+    mic, clone, superclone, nam, ir or reverb; ir and reverb are only searched when asked for.
+    `category` filters blocks, like "overdrive".
+
+    `installed` is true, false, or null if the pedal couldn't be checked. For a model, write
+    `index` to `param` on `block`. For a file, write `file` to `param` on one of `blocks`.
+    Trust `inspired_by` only as far as `notes` says, and never guess it for an unknown model.
+    """
+    return _find_models(client, query, kind, category, limit)
 
 
 @mcp.tool()

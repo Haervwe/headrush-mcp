@@ -10,7 +10,8 @@ This server can change a real pedal that someone may be playing. It's meant to b
 - Don't bypass the unsaved-edits guard. It protects work you can't see.
 - Keep the server local: stdio only, with no network listener.
 - Every capability must be a tool or documented. If you needed a throwaway script to do something, it belongs in a tool.
-- Keep personal details out of the repo, including IP addresses and users' rig libraries.
+- Keep personal details out of the repo, including IP addresses, users' rig libraries and their installed files.
+- Installed models and files differ per pedal, so read them live. `catalog.json` only says what known things are. Don't state what a model with a null `inspired_by` is based on.
 
 ## Device behaviour
 
