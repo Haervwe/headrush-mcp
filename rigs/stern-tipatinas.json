@@ -1,0 +1,127 @@
+{
+  "name": "Stern Tipatinas",
+  "_notes": "Approximation from documented Stern gear, not measured from the record. Numbers are normalized 0-1. See docs/stern-tipatinas.md.",
+  "routing": 0,
+  "blocks": [
+    {
+      "slot": 1,
+      "block": "S1 Drive",
+      "params": { "On": false, "Drive": 0.35, "Tone": 0.55, "Level": 0.6 }
+    },
+    {
+      "slot": 2,
+      "block": "B2 Drive",
+      "params": { "On": false, "Gain": 0.45, "Tone": 0.5, "Level": 0.5 }
+    },
+    {
+      "slot": 3,
+      "block": "Amp",
+      "params": {
+        "On": true,
+        "Type": 15,
+        "Bright": true,
+        "GainA": 0.32,
+        "Bass": 0.45,
+        "Mid": 0.5,
+        "Treble": 0.55,
+        "Presence": 0.5,
+        "Master": 0.5,
+        "Level": 0.5
+      }
+    },
+    {
+      "slot": 4,
+      "block": "Cab",
+      "params": { "On": true, "CabType": 5, "MicType": 1, "OnAxis": true }
+    },
+    {
+      "slot": 5,
+      "block": "Detune",
+      "params": {
+        "On": true,
+        "Voices": 1,
+        "Detune1": 0.39,
+        "Detune2": 0.63,
+        "Delay1": 0.0271,
+        "Delay2": 0.0104,
+        "Mix": 0.3,
+        "Width": 1.0
+      }
+    },
+    {
+      "slot": 6,
+      "block": "AIR Delay",
+      "params": {
+        "On": true,
+        "Sync": false,
+        "Delay": 0.095,
+        "Feedback": 0.15,
+        "Mix": 0.08,
+        "Width": 1.0,
+        "Tails": true
+      }
+    },
+    {
+      "slot": 7,
+      "block": "AIR Delay 2",
+      "params": {
+        "On": false,
+        "Sync": false,
+        "Delay": 0.2,
+        "Feedback": 0.25,
+        "Mix": 0.12,
+        "Width": 1.0,
+        "Tails": true
+      }
+    },
+    {
+      "slot": 8,
+      "block": "Spring Reverb",
+      "params": { "On": true, "Mix": 0.15 }
+    }
+  ],
+  "footswitches": {
+    "1": { "module": "S1 Drive", "operation": "On" },
+    "2": { "module": "B2 Drive", "operation": "On" },
+    "3": { "module": "AIR Delay 2", "operation": "On" },
+    "4": {
+      "scene": {
+        "name": "HEAD",
+        "blocks": {
+          "S1 Drive": "off",
+          "B2 Drive": "off",
+          "Detune": "on",
+          "AIR Delay": "on",
+          "AIR Delay 2": "off",
+          "Spring Reverb": "on"
+        }
+      }
+    },
+    "5": {
+      "scene": {
+        "name": "SOLO",
+        "blocks": {
+          "S1 Drive": "on",
+          "B2 Drive": "off",
+          "Detune": "on",
+          "AIR Delay": "on",
+          "AIR Delay 2": "off",
+          "Spring Reverb": "on"
+        }
+      }
+    },
+    "6": {
+      "scene": {
+        "name": "BIG",
+        "blocks": {
+          "S1 Drive": "off",
+          "B2 Drive": "on",
+          "Detune": "on",
+          "AIR Delay": "on",
+          "AIR Delay 2": "on",
+          "Spring Reverb": "on"
+        }
+      }
+    }
+  }
+}
