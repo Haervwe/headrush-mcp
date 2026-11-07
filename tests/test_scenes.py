@@ -20,6 +20,7 @@ class Pedal:
         self.puts: list[dict] = []
         self.methods: list[str] = []
         self.ignore: set[str] = set()
+        self.missing: set[str] = set()  # Objects that answer 404, like a block with no object.
         chain = {f"ModuleType{n}": 0 for n in range(1, 15)} | {"ModuleType1": 1, "ModuleType3": 2}
         fs = {
             "AnySwitchDoubling": doubling,
@@ -77,6 +78,8 @@ class Pedal:
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path.removeprefix("/api/v1")
+        if "/" + path.split("/", 2)[-1] in self.missing:
+            return httpx.Response(404, json={"desc": "no such object"})
         if path.startswith("/object-method"):
             self.methods.append(path)
             if path.endswith("/blockPresets"):
@@ -214,7 +217,7 @@ def test_set_scene_warns_when_doubling_and_path_would_do_nothing(monkeypatch):
 
 
 def test_get_footswitches_hides_stale_assignments_on_scene_switches(pedal):
-    switches = {entry["switch"]: entry for entry in call("get_footswitches")}
+    switches = {entry["switch"]: entry for entry in call("get_footswitches")["switches"]}
     assert "module" not in switches[4]
     assert "operation" not in switches[4]
     assert switches[4]["doubling"] == "B"
@@ -309,3 +312,108 @@ def test_spec_format_is_available_as_a_tool_and_a_resource():
     assert "doubling" in text and "footswitches" in text
     contents = asyncio.run(server.mcp.read_resource("headrush://docs/rig-specs"))
     assert "doubling" in str(contents)
+
+
+def test_get_footswitches_reports_settings_without_warnings_when_bank_b_is_reachable(pedal):
+    result = call("get_footswitches")
+    assert result["warnings"] == []
+    assert result["auto_assign_footswitches"] is True
+    assert pedal.puts == []
+
+
+def test_get_footswitches_warns_when_bank_b_has_no_way_in(pedal):
+    pedal.objects[GENERAL]["TunerFSAssignment"] = 0
+    warnings = call("get_footswitches")["warnings"]
+    assert len(warnings) == 1
+    assert "[4]" in warnings[0] and "Bank A/B" in warnings[0]
+
+
+@pytest.mark.parametrize("module", ["", "Empty Slot"])
+def test_get_footswitches_ignores_an_empty_bank_b(pedal, module):
+    pedal.objects[GENERAL]["TunerFSAssignment"] = 0
+    pedal.objects[FOOTSWITCH]["ModeNew4"] = 0
+    pedal.objects[FOOTSWITCH]["Module4"] = module
+    assert call("get_footswitches")["warnings"] == []
+
+
+def test_get_footswitches_skips_the_bank_warning_when_holds_have_no_names(pedal):
+    pedal.objects[GENERAL]["TunerFSAssignment"] = 0
+    pedal.meta[GENERAL] = {}
+    assert call("get_footswitches")["warnings"] == []
+
+
+def test_get_footswitches_warns_that_on_press_disables_holds(pedal):
+    pedal.objects[GENERAL]["OnPressFS"] = True
+    warnings = call("get_footswitches")["warnings"]
+    assert any("On Press" in w for w in warnings)
+
+
+@pytest.mark.parametrize(("value", "warns"), [(0, True), (1, False)])
+def test_get_footswitches_reads_on_press_by_its_option_name(pedal, value, warns):
+    pedal.objects[GENERAL]["OnPressFS"] = value
+    pedal.meta[GENERAL]["OnPressFS"] = {"x-options": {"strings": ["On Press", "On Release"]}}
+    warnings = call("get_footswitches")["warnings"]
+    assert any("On Press" in w for w in warnings) is warns
+
+
+def test_get_footswitches_reports_unknown_auto_assign_as_null(pedal):
+    del pedal.objects[GENERAL]["AutoAssignments"]
+    assert call("get_footswitches")["auto_assign_footswitches"] is None
+
+
+def test_get_footswitches_still_works_when_settings_cannot_be_read(pedal):
+    pedal.missing = {GENERAL}
+    result = call("get_footswitches")
+    assert len(result["switches"]) == 6
+    assert result["warnings"] == [] and result["auto_assign_footswitches"] is None
+
+
+def test_set_slot_block_warns_when_auto_assign_may_take_a_switch(pedal):
+    result = call("set_slot_block", slot=2, block="Delay")
+    assert {"slot": 2, "block": "Delay"} in result["chain"]
+    assert any("Auto Assign Footswitches" in w for w in result["warnings"])
+    pedal.objects[GENERAL]["AutoAssignments"] = False
+    assert call("set_slot_block", slot=2, block="Amp")["warnings"] == []
+
+
+def test_set_slot_block_does_not_warn_when_clearing_a_slot(pedal):
+    assert call("set_slot_block", slot=3, block="Empty Slot")["warnings"] == []
+
+
+def test_set_slot_block_keeps_its_result_when_settings_reply_is_not_json(pedal, monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith(GENERAL):
+            return httpx.Response(200, text="busy")
+        return pedal(request)
+
+    client = HeadRushClient(host="fake", allow_writes=True, transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(server, "client", client)
+    result = call("set_slot_block", slot=2, block="Delay")
+    assert {"slot": 2, "block": "Delay"} in result["chain"] and result["warnings"] == []
+
+
+def test_set_slot_block_refuses_a_block_with_no_object(pedal):
+    pedal.objects[BLOCKS]["ModuleTypes"].append("ReValver Amp 2")
+    pedal.missing = {"/Evil/Engine/Patch/ReValver_Amp_2"}
+    with pytest.raises(ToolError, match="ReValver Amp 2.*no object.*crashed"):
+        call("set_slot_block", slot=2, block="ReValver Amp 2")
+    assert pedal.puts == []
+
+
+def test_create_rig_refuses_a_block_with_no_object_before_making_a_new_rig():
+    pedal = Pedal()
+    pedal.objects[BLOCKS]["ModuleTypes"].append("C-Verb 2")
+    pedal.missing = {"/Evil/Engine/Patch/C-Verb_2"}
+    spec = {"name": "New", "blocks": [{"slot": 1, "block": "Amp"}, {"slot": 2, "block": "C-Verb 2"}]}
+    with pytest.raises(ToolError, match="C-Verb 2.*no object"):
+        apply_rig(connect(pedal), spec, sleep=lambda _: None)
+    assert pedal.methods == [] and pedal.puts == []
+
+
+def test_create_rig_warns_when_auto_assign_may_take_a_switch():
+    pedal = Pedal()
+    result = apply_rig(connect(pedal), spec_with(), sleep=lambda _: None)
+    assert any("Auto Assign Footswitches" in w for w in result["warnings"])
+    pedal.objects[GENERAL]["AutoAssignments"] = False
+    result = apply_rig(connect(pedal), spec_with(name="Other"), sleep=lambda _: None)
+    assert result["warnings"] == []

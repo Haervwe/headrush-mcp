@@ -22,6 +22,8 @@ RIG = "/Evil/Engine/Patch/Rig"
 FOOTSWITCH = "/Evil/Engine/FootSwitch"
 SAVE_DIALOG = "/Evil/API/RigSaveDialog"
 FILES = "/Evil/API/FileAccess"
+GENERAL_SETTINGS = "/Evil/Engine/Settings/General"
+EMPTY_SLOT = "Empty Slot"
 
 READ_METHODS = {
     (FILES, "ls"),  # The official editor's file pickers use this to browse folders.
@@ -52,6 +54,10 @@ _BLOCK_PATH = re.compile(r"^/Evil/Engine/Patch/[\w\-'()]+$")
 class HeadRushError(ToolError):
     """A device call failed. As a ToolError, its message reaches the MCP client."""
 
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
 
 class PolicyError(HeadRushError):
     """A call was refused before reaching the device."""
@@ -81,10 +87,35 @@ class HeadRushClient:
     def _send(self, method: str, url: str, **kwargs: Any) -> Any:
         try:
             response = self._http.request(method, url, **kwargs)
-            response.raise_for_status()
         except httpx.HTTPError as exc:
             raise HeadRushError(f"{method} {url}: {exc}") from exc
-        return response.json() if response.content else None
+        if response.status_code == 403:
+            raise HeadRushError(
+                "The pedal refused access, so HeadRush Remote seems to be off. Turn it on in "
+                "Global Settings > HeadRush Remote on the pedal." + _desc(response),
+                status=403,
+            )
+        if response.status_code == 401:
+            raise HeadRushError(
+                "The pedal requires approval for this connection. Approve it on the pedal's "
+                "screen, or turn off Authorize with PIN in Global Settings > HeadRush Remote. "
+                "This server doesn't do PIN pairing." + _desc(response),
+                status=401,
+            )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise HeadRushError(f"{method} {url}: {exc}", status=response.status_code) from exc
+        # A write's reply, such as a PUT's, can be empty or plain text. A read's must be JSON,
+        # so callers that fail soft on HeadRushError also catch a bad read.
+        try:
+            return response.json()
+        except ValueError:
+            if method == "GET":
+                raise HeadRushError(
+                    f"{method} {url}: reply wasn't JSON", status=response.status_code
+                ) from None
+            return None
 
     def _require_writes(self) -> None:
         if not self.allow_writes:
@@ -99,6 +130,25 @@ class HeadRushClient:
         if not _READ_PATH.match(path):
             raise PolicyError(f"Invalid object path: {path}")
         return self._send("GET", f"/object-meta{path}")
+
+    def require_block_object(self, block: str) -> None:
+        """Refuse a block the firmware lists but has no device object for.
+
+        ReValver Amp 2 and C-Verb 2 are known cases. Writing such a block type crashed a
+        pedal in community testing, so it's refused before anything is written.
+        """
+        if block == EMPTY_SLOT:
+            return
+        try:
+            self.get_meta(block_path(block))
+        except HeadRushError as exc:
+            if exc.status != 404:
+                raise
+            raise PolicyError(
+                f"{block} is listed by the firmware but has no object on this pedal, so it "
+                "can't be placed. Writing a block type like this crashed a pedal in community "
+                "testing."
+            ) from exc
 
     def call(self, path: str, method: str, args: list[Any]) -> Any:
         key = (path, method)
@@ -174,6 +224,16 @@ class HeadRushClient:
             for slot in range(1, 15)
             if chain.get(f"ModuleType{slot}")
         ]
+
+
+def _desc(response: httpx.Response) -> str:
+    """Return the pedal's own explanation from an error reply, if it gave one."""
+    try:
+        body = response.json()
+    except ValueError:
+        return ""
+    desc = body.get("desc") if isinstance(body, dict) else None
+    return f" The pedal said: {desc}" if desc else ""
 
 
 def _validate(path: str, key: str, value: Any, meta: dict[str, Any] | None) -> None:

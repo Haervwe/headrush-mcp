@@ -48,10 +48,10 @@ Use a split routing, with `Amp` and `Cab` on path A and `Amp 2` and `Cab 2` on p
 |---|---|---|
 | `Para1Level`, `Para2Level` | -60 to +12 dB | `0.75` is -6 dB |
 | `Para1Pan`, `Para2Pan` | -100 to +100 | `0` is hard left, `1` hard right |
-| `ParaDelay` | -30000 to +30000 µs | `0.5` is no delay |
+| `ParaDelay` | -30000 to +30000 µs | `0.5` is no delay. Negative delays path A, positive delays path B |
 | `ParaXFade` | -100 to +100 | `0.5` is an even blend |
 
-See [`rigs/stern-stereo-test.json`](../../rigs/stern-stereo-test.json) for a full example. The `Amp` and `Cab` blocks can also double in place using their `Doubling` and `DoubleMode` parameters, but `create_rig` hasn't been tested with that.
+See [`rigs/stern-stereo-test.json`](../../rigs/stern-stereo-test.json) for a full example. The `Amp` and `Cab` blocks can also double in place using their `Doubling` and `DoubleMode` parameters, but `create_rig` hasn't been tested with that. Stereo doubling runs both sides. Switch doubling (`DoubleMode` true) runs one, and the guide only offers a footswitch assigned to `Doubling: A <Switch> B`, or a scene's `doubling`, to change it (User Guide p.11, p.32). Without one, the rig probably stays on one side.
 
 Check the sound in mono if you pan hard, as it depends on how your output is connected.
 
@@ -95,7 +95,22 @@ Scene names display in capitals on the official editor, so use capitals for cons
 
 `set_scene` takes the same fields, and `get_scene` returns them. With `set_scene`, `blocks` is optional, and anything you leave out keeps its current value, so you can change just `doubling`. A scene's second switch state and MIDI out can't be set here. Do those on the pedal.
 
-Switches 1-3 and 4-6 are separate banks, and each switch has its own scene. Two switches with the same label can still behave differently, so check both.
+Switches 1-3 and 4-6 are separate banks, and each switch has its own scene. Two switches with the same label can still behave differently, so check both. Switches 4-6 can only be reached if the user has set a hold to Bank A/B in Global Settings, and `get_footswitches` warns if not. Its warnings rely on setting names not yet confirmed on a pedal, so check Global Settings if one looks wrong. When switches 4-6 can't be reached, put what matters on 1-3.
+
+If Auto Assign Footswitches is on, the pedal gives each new block the next free switch, and `create_rig` warns when that may happen (the setting name isn't confirmed on a pedal yet). Assign every switch you care about in the spec.
+
+## File and block limits
+
+From the [User Guide](https://cdn.inmusicbrands.com/Software/SGEE/52/HeadRush%20Flex%20Prime%20-%20User%20Guide%20-%20v5.2.0.pdf), firmware 5.2:
+
+- **C-Verb:** one per rig. Files are usually WAV, AIF or OPUS, up to 10 seconds, and only the first two channels are used (p.24).
+- **IR:** cabinet IRs are usually WAV files. `IR (1024)` truncates them to 1024 samples to save DSP (p.24).
+- **NAM:** up to two A2 captures at Full quality per rig, as two blocks or one doubled block. Up to four A2 Lite, by doubling two blocks. Only one A1 capture. Captures are forced to Lite with more than two loaded, or with a stereo effect before two NAM blocks (p.23).
+- **Tails:** with any NAM block in the rig, reverb and delay tails stop when switching rigs (p.23).
+- **Clones:** files end in `.ac` (amp and pedal clones) or `.sc` (SuperClones).
+- **Second instances:** only use blocks that `describe_block` can read. `create_rig` and `set_slot_block` refuse ones the pedal lists without an object, like `ReValver Amp 2`.
+
+Values are reported to be snapped to each parameter's step size (community, Core), so `create_rig` accepts a read-back within one step.
 
 ## If a build fails
 

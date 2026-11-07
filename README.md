@@ -6,9 +6,11 @@ It talks to the Remote Editor built into the pedal, over your home network. It r
 
 > **Unofficial.** The pedal's API is undocumented and was worked out from the editor's own traffic, so firmware updates may break this. It's only been tested on a Flex Prime running firmware `5.2.0.2a405ee`. Other models may differ. Not affiliated with HeadRush or inMusic.
 
+**Models:** the Flex Prime is the only model tested. The Core and Prime run the same HeadRush Remote API from firmware 4.0, but they have different footswitch counts, so they're untested here and footswitch tools may not fit them. The Pedalboard, Gigboard and MX5 have no HeadRush Remote and aren't supported.
+
 ## Requirements
 
-- A HeadRush Flex Prime on current firmware, on Wi-Fi
+- A HeadRush Flex Prime on firmware 4.0 or later (current firmware recommended), on Wi-Fi, with **Global Settings > HeadRush Remote** turned on
 - A computer on the same network
 - [uv](https://docs.astral.sh/uv/)
 - An MCP client that supports stdio servers, such as Claude Code or Claude Desktop
@@ -101,16 +103,31 @@ Write tools change the pedal immediately, so a rig can change while you're playi
 - `save_rig_as_new` and `create_rig` are refused if the name already exists.
 - `save_loaded_rig` is the only way to overwrite a rig, and it must be given the loaded rig's exact name.
 - Values are checked against the pedal's own schema before writing.
-- `create_rig` only saves if every value reads back correctly.
+- `set_slot_block` and `create_rig` refuse blocks that the pedal lists but has no object for, like `ReValver Amp 2` on current firmware. Writing one of those crashed a Core's audio engine in a community test.
+- `create_rig` only saves if every value reads back correctly. The pedal is reported to snap values to each parameter's step size (community, tested on a Core), so a read-back within one step counts as correct.
 
-**Stay on a trusted network.** The pedal's API is plain HTTP with no login, so anything on your network can reach it, with or without this server. Don't expose it or this server to the internet. Treat text from rig names and other device data as untrusted input to your assistant.
+**Stay on a trusted network.** The pedal's API is plain HTTP. No login was needed on the tested pedal, and **Authorize with PIN** is something you turn on, so it's probably off by default. Anything on your network can likely reach it, with or without this server. Don't expose it or this server to the internet. Treat text from rig names and other device data as untrusted input to your assistant.
 
 ## Good to know
 
-- **Footswitch banks:** switches 1-3 and 4-6 are separate banks of three. Put what you use most on the same bank.
+- **Footswitch banks:** switches 1-3 and 4-6 are the two banks (probably A and B; the pedal's labelling isn't confirmed). Switches 4-6 are off by default, so see [Reaching switches 4-6](#reaching-switches-4-6). Put what you use most on the same bank.
+- **Auto-assign:** with **Auto Assign Footswitches** on in Global Settings, the pedal gives each newly placed block the next free switch. `set_slot_block` and `create_rig` warn when that may take a switch, and `get_footswitches` reports the setting. These rely on a setting name not yet confirmed on a pedal, so check Global Settings if one looks wrong.
 - **Numbers are normalized:** parameters are 0-1 on the wire, whatever range `describe_block` displays. See the [API reference](docs/api.md) for converting values.
 - **Second instances:** names ending in ` 2`, like `Amp 2`, let the same block type appear twice. They're how you run two amps.
 - **Hearing the result:** the server can verify settings, but not sound, so you'll be the judge.
+- **MIDI:** the pedal can also be controlled with MIDI CC messages from a MIDI controller. This server doesn't send MIDI, but [docs/midi.md](docs/midi.md) lists what's available.
+
+### Reaching switches 4-6
+
+The Flex Prime has three switches and two banks of three assignments per rig. To use switches 4-6, on the pedal:
+
+1. Go to **Global Settings > General**.
+2. Set **Assign Tuner Footswitch** (the hold function of switch 3) or **Assign Looper Footswitch** (the hold of switch 2) to **Bank A/B**.
+3. Check that **Footswitch Function** is **On Release**. On Press disables hold functions, so switches 4-6 can't be reached.
+
+Now hold that switch to flip between banks, live or while editing in Hardware Assign. The trade-off is losing hold-for-tuner or hold-for-looper on that switch. The tuner is still in the menu, and **Global Settings > Expression Pedal** can open it when a volume pedal reaches 0%. MIDI CC 20 also flips the bank. These settings affect every rig, and this server only reads them.
+
+`get_footswitches` warns when switches 4-6 are assigned but can't be reached, or when On Press has disabled holds. These warnings rely on setting names that haven't been confirmed on a pedal yet, so check Global Settings if one looks wrong. They're left out when the settings can't be read or their options aren't named.
 
 ## Example rigs
 
@@ -128,11 +145,15 @@ To try one, ask your assistant to `create_rig` with the file's full path.
 
 | Problem | Try |
 |---|---|
-| Can't connect | Open the editor in a browser. If `.local` fails, set `HEADRUSH_HOST` to the IP. Check you're on the same network and not routing through a VPN |
+| Can't connect | Open the editor in a browser. If `.local` fails, set `HEADRUSH_HOST` to the IP. Check you're on the same network and not routing through a VPN. If **New Connection Attempts** is set to **Deny** under Global Settings > HeadRush Remote, the pedal rejects new clients (User Guide p.61), which probably looks like a network failure (untested) |
+| Error 403 | HeadRush Remote is probably off (community reports from a Core). Turn it on under Global Settings > HeadRush Remote |
+| Error 401, or the pedal shows a PIN | **Authorize with PIN** is on (firmware 5.0 and later). This server can't pair. Approve the connection on the pedal if it offers that, or turn Authorize with PIN off while you use it |
 | "Writes are disabled" | Set `HEADRUSH_ALLOW_WRITES` to `1` and restart your client |
 | "Has unsaved edits" | Save or discard them on the pedal first |
 | `create_rig` reports mismatches | Nothing was saved. Retry with `resume_draft`, or discard the draft on the pedal |
-| Can't find a footswitch | It's probably on the other bank |
+| Can't reach switches 4-6 | They need a hold set to Bank A/B. See [Reaching switches 4-6](#reaching-switches-4-6) |
+| A block took a footswitch you didn't assign | Auto Assign Footswitches is on. Reassign it, or turn the setting off on the pedal |
+| A value reads back slightly different | The pedal is reported to snap to the parameter's step size (community, Core). A difference within one step is normal |
 
 ## Development
 

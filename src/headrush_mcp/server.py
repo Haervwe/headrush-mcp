@@ -14,7 +14,9 @@ from .catalog import find_models as _find_models
 from .client import (
     BLOCKS,
     CHAIN,
+    EMPTY_SLOT,
     FOOTSWITCH,
+    GENERAL_SETTINGS,
     RIG,
     RIGS,
     SETLISTS,
@@ -25,6 +27,7 @@ from .client import (
 from .rigs import (
     ROUTINGS,
     apply_rig,
+    auto_assign_warnings,
     check_scene,
     check_scene_presets,
     find_mismatches,
@@ -39,7 +42,7 @@ client = HeadRushClient(
     allow_writes=os.environ.get("HEADRUSH_ALLOW_WRITES") == "1",
 )
 _MIX = block_path("Mix")
-_GENERAL_SETTINGS = "/Evil/Engine/Settings/General"
+_GENERAL_SETTINGS = GENERAL_SETTINGS
 _LABEL_UPDATE_SECONDS = 1.0  # The pedal updates footswitch labels shortly after a write.
 _RIG_SPEC_FORMAT = Path(__file__).with_name("rig-specs.md")
 _SWITCH_TYPES = {0: "toggle", 1: "hold", 2: "scene"}
@@ -137,9 +140,67 @@ def list_block_presets(block: str) -> list[str]:
     return client.call(BLOCKS, "blockPresets", [block])
 
 
+def _read_general_settings() -> tuple[dict[str, Any], dict[str, Any]]:
+    """Read global settings and their schema. Read-only: this server never writes them."""
+    values = client.get_properties(_GENERAL_SETTINGS)
+    properties = client.get_meta(_GENERAL_SETTINGS).get("properties") or {}
+    return values, properties
+
+
+def _option(values: dict[str, Any], properties: dict[str, Any], key: str) -> Any:
+    """Return a setting's option name, or its raw value if the schema doesn't name it."""
+    names = ((properties.get(key) or {}).get("x-options") or {}).get("strings") or []
+    value = values.get(key)
+    return names[value] if isinstance(value, int) and 0 <= value < len(names) else value
+
+
+def _on_press(values: dict[str, Any], properties: dict[str, Any]) -> bool:
+    """Return whether Footswitch Function is On Press, by option name when the schema has one."""
+    option = _option(values, properties, "OnPressFS")
+    if isinstance(option, str):
+        return "press" in option.lower()
+    return bool(option)
+
+
+def _bank_warnings(
+    switches: list[dict[str, Any]], values: dict[str, Any], properties: dict[str, Any]
+) -> list[str]:
+    """Explain why switches 4-6 or the hold functions might be out of reach."""
+    warnings = []
+    holds = [_option(values, properties, k) for k in ("TunerFSAssignment", "LooperFSAssignment")]
+    # Only judge the holds if the schema named them; a raw number can't be read as Bank A/B.
+    readable = any(isinstance(hold, str) for hold in holds)
+    has_bank = any("Bank" in hold for hold in holds if isinstance(hold, str))
+    used_b = [
+        entry["switch"]
+        for entry in switches[3:]
+        if entry["type"] == "scene"
+        or entry["type"] in ("toggle", "hold") and entry.get("module") not in (None, "", EMPTY_SLOT)
+    ]
+    if used_b and readable and not has_bank:
+        warnings.append(
+            f"Switches {used_b} are on the second bank (switches 4-6), which can't be reached "
+            "until a hold function is set to Bank A/B in Global Settings > General (Assign Tuner "
+            "Footswitch is the FS3 hold, Assign Looper Footswitch the FS2 hold)."
+        )
+    if _on_press(values, properties):
+        warnings.append(
+            "Footswitch Function is On Press, which disables hold functions, including Bank "
+            "A/B. Set it to On Release in Global Settings > General to use them."
+        )
+    return warnings
+
+
 @mcp.tool()
-def get_footswitches() -> list[dict[str, Any]]:
-    """Summarise footswitches. Switches 1-3 and 4-6 are separate banks.
+def get_footswitches() -> dict[str, Any]:
+    """Summarise footswitches, with warnings about switches you can't reach.
+
+    Switches 1-3 and 4-6 are separate banks. Switches 4-6 are only reachable by holding a
+    switch whose hold function is Bank A/B, and holds don't work with Footswitch Function set
+    to On Press; `warnings` says when either gets in the way. These warnings rely on setting
+    names not yet confirmed on a pedal, so check Global Settings if one looks wrong.
+    `auto_assign_footswitches` is whether the pedal puts newly placed blocks on free switches,
+    or null if settings couldn't be read.
 
     Scene switches show doubling and path; use get_scene for the rest. The pedal keeps an old
     module and operation on scene switches, so those only appear on toggle and hold switches.
@@ -162,7 +223,15 @@ def get_footswitches() -> list[dict[str, Any]]:
             entry["module"] = fs.get(f"Module{n}")
             entry["operation"] = fs.get(f"Operation{n}")
         summary.append(entry)
-    return summary
+    result: dict[str, Any] = {"switches": summary, "warnings": [], "auto_assign_footswitches": None}
+    try:
+        values, properties = _read_general_settings()
+    except HeadRushError:
+        return result  # Without settings there's nothing to warn about, so don't fail.
+    result["warnings"] = _bank_warnings(summary, values, properties)
+    auto = values.get("AutoAssignments")
+    result["auto_assign_footswitches"] = None if auto is None else bool(auto)
+    return result
 
 
 @mcp.tool()
@@ -181,17 +250,10 @@ def get_footswitch_settings() -> dict[str, Any]:
 
     This server can't change them, so do that on the pedal.
     """
-    values = client.get_properties(_GENERAL_SETTINGS)
-    properties = client.get_meta(_GENERAL_SETTINGS).get("properties") or {}
-
-    def option(key: str) -> Any:
-        names = ((properties.get(key) or {}).get("x-options") or {}).get("strings") or []
-        value = values.get(key)
-        return names[value] if isinstance(value, int) and value < len(names) else value
-
+    values, properties = _read_general_settings()
     return {
-        "tuner_switch": option("TunerFSAssignment"),
-        "looper_switch": option("LooperFSAssignment"),
+        "tuner_switch": _option(values, properties, "TunerFSAssignment"),
+        "looper_switch": _option(values, properties, "LooperFSAssignment"),
         "auto_assign_footswitches": values.get("AutoAssignments"),
         "on_press": values.get("OnPressFS"),
     }
@@ -206,13 +268,21 @@ def set_block_params(block: str, values: dict[str, Any]) -> dict[str, Any]:
 
 
 @mcp.tool()
-def set_slot_block(slot: int, block: str) -> list[dict[str, Any]]:
-    """Put a block in chain slot 1-14 without saving. Its parameters reset shortly afterwards."""
+def set_slot_block(slot: int, block: str) -> dict[str, Any]:
+    """Put a block in chain slot 1-14 without saving. Its parameters reset shortly afterwards.
+
+    Refused for blocks the firmware lists but has no object for, such as ReValver Amp 2 and
+    C-Verb 2. Returns the chain and `warnings`, such as when Auto Assign Footswitches may
+    have put the block on a free switch.
+    """
     types = client.get_properties(BLOCKS)["ModuleTypes"]
     if block not in types:
         raise HeadRushError(f"Unknown block: {block}")
+    client.require_block_object(block)
     client.set_properties(CHAIN, {f"ModuleType{slot}": types.index(block)})
-    return client.current_chain()
+    # Clearing a slot can't put a block on a footswitch, so only warn when placing one.
+    warnings = auto_assign_warnings(client) if block != EMPTY_SLOT else []
+    return {"chain": client.current_chain(), "warnings": warnings}
 
 
 @mcp.tool()
@@ -234,7 +304,7 @@ def set_mix(values: dict[str, float]) -> dict[str, Any]:
     return {key: current.get(key) for key in values}
 
 
-def _write_switch(switch: int, config: dict[str, Any]) -> list[dict[str, Any]]:
+def _write_switch(switch: int, config: dict[str, Any]) -> dict[str, Any]:
     spec = {"blocks": client.current_chain(), "footswitches": {str(switch): config}}
     for key, value in footswitch_values(spec)[0].items():
         client.set_properties(FOOTSWITCH, {key: value})
@@ -243,7 +313,7 @@ def _write_switch(switch: int, config: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-def set_footswitch(switch: int, module: str, operation: str = "On", name: str = "") -> list[dict[str, Any]]:
+def set_footswitch(switch: int, module: str, operation: str = "On", name: str = "") -> dict[str, Any]:
     """Make footswitch 1-6 toggle one block, without saving."""
     return _write_switch(switch, {"module": module, "operation": operation, "name": name})
 
@@ -285,7 +355,7 @@ def set_scene(
 
 
 @mcp.tool()
-def activate_scene(switch: int) -> list[dict[str, Any]]:
+def activate_scene(switch: int) -> dict[str, Any]:
     """Fire the scene on footswitch 1-6 of the loaded rig, without saving."""
     if client.get_properties(FOOTSWITCH).get(f"ModeNew{switch}") != 2:
         raise HeadRushError(f"Footswitch {switch} isn't a scene")
@@ -338,9 +408,14 @@ def create_rig(
     """Build a new rig from a spec, verify it, and save it only if everything matches.
 
     Pass `spec` or a local JSON `spec_path`; get_rig_spec_format has the format, including
-    scenes. Unknown keys are refused. Refused if the name exists or the loaded rig has unsaved
-    edits. If a build fails, retry with `resume_draft` to reuse the unnamed draft it left,
-    which overwrites that draft.
+    scenes. Unknown keys are refused. Refused if the name exists, the loaded rig has unsaved
+    edits, or a block has no object on the pedal (such as ReValver Amp 2 and C-Verb 2). If a
+    build fails, retry with `resume_draft` to reuse the unnamed draft it left, which
+    overwrites that draft.
+
+    Numbers count as matching within one step of the parameter's grid, since the pedal snaps
+    to it. Check `warnings`: with Auto Assign Footswitches on, the pedal may have put new
+    blocks on switches the spec didn't set.
     """
     if (spec is None) == (spec_path is None):
         raise HeadRushError("Pass exactly one of spec or spec_path")

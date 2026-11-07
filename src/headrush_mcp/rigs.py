@@ -6,7 +6,17 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from .client import BLOCKS, CHAIN, FOOTSWITCH, RIGS, HeadRushClient, HeadRushError, block_path
+from .client import (
+    BLOCKS,
+    CHAIN,
+    EMPTY_SLOT,
+    FOOTSWITCH,
+    GENERAL_SETTINGS,
+    RIGS,
+    HeadRushClient,
+    HeadRushError,
+    block_path,
+)
 
 _TOLERANCE = 0.002
 _ATTEMPTS = 6
@@ -15,7 +25,6 @@ _MODE_TOGGLE = 0
 _MODE_SCENE = 2
 _NO_CHANGE = 0
 _NO_PRESET = "No Preset"
-_EMPTY_SLOT = "Empty Slot"
 _MAX_COLOUR = 13
 _SCENE_STATES = {"on": 1, "off": 2, "nochange": _NO_CHANGE}
 _SCENE_SIDES = {"A": 1, "B": 2, "nochange": _NO_CHANGE}
@@ -51,6 +60,8 @@ def apply_rig(
 
     Creating a rig and placing blocks both finish asynchronously and can undo earlier
     writes, so writes are repeated until they hold through a settle period.
+
+    Blocks the firmware lists but has no object for are refused before anything is written.
     """
     _check_spec(spec)
     name = spec["name"]
@@ -69,6 +80,8 @@ def apply_rig(
         if block not in types:
             raise HeadRushError(f"Unknown block: {block}")
         chain_values[f"ModuleType{slot}"] = types.index(block)
+    for block in sorted({entry["block"] for entry in spec["blocks"]}):
+        client.require_block_object(block)
 
     # Everything that can be refused is checked before the pedal changes.
     switch_values = footswitch_values(spec)
@@ -92,6 +105,7 @@ def apply_rig(
     if save and not mismatches:
         saved = client.call(RIGS, "saveRigAs", [name, -1]) is not False
     warnings = sorted({w for scene in scenes for w in scene_warnings(client, scene)})
+    warnings += auto_assign_warnings(client)
     return {
         "name": name,
         "saved": saved,
@@ -163,6 +177,23 @@ def scene_warnings(client: HeadRushClient, scene: dict[str, Any]) -> list[str]:
     return warnings
 
 
+def auto_assign_warnings(client: HeadRushClient) -> list[str]:
+    """Warn that Auto Assign Footswitches may have put newly placed blocks on free switches.
+
+    Never fails: if the global settings can't be read, there's no warning.
+    """
+    try:
+        auto = client.get_properties(GENERAL_SETTINGS).get("AutoAssignments")
+    except HeadRushError:
+        return []
+    if not auto:
+        return []
+    return [
+        "Auto Assign Footswitches is on in Global Settings > General, so the pedal may have "
+        "assigned a newly placed block to a free footswitch. Check get_footswitches."
+    ]
+
+
 def read_scene(client: HeadRushClient, switch: int) -> dict[str, Any]:
     """Read a scene in the same shape set_scene and rig specs use."""
     if switch not in range(1, 7):
@@ -176,7 +207,7 @@ def read_scene(client: HeadRushClient, switch: int) -> dict[str, Any]:
     presets = {}
     for slot in range(1, 15):
         block = fs.get(f"Scene{switch}_{slot}_Effect")
-        if not block or block == _EMPTY_SLOT:
+        if not block or block == EMPTY_SLOT:
             continue
         blocks[block] = states.get(fs.get(f"Scene{switch}_{slot}_Mode"), "nochange")
         preset = fs.get(f"Scene{switch}Slot{slot}Preset")
@@ -286,41 +317,83 @@ def _write_until_stable(
 ) -> list[str]:
     """Write values, then rewrite whatever didn't stick until a full pass holds."""
     pending = expected
+    grids = _grids(client, expected)
     for _ in range(_ATTEMPTS):
         for path, values in pending:
             # One write per key, in the order the official editor uses.
             for key, value in values.items():
                 client.set_properties(path, {key: value})
         sleep(_SETTLE_SECONDS)
-        pending = _differences(client, expected)
+        pending = _differences(client, expected, grids)
         if not pending:
             return []
-    return find_mismatches(client, expected)
+    return find_mismatches(client, expected, grids)
+
+
+def _grids(
+    client: HeadRushClient, expected: list[tuple[str, dict[str, Any]]]
+) -> dict[tuple[str, str], float]:
+    """Read each float parameter's grid step from the schema, one meta read per object.
+
+    The pedal snaps a written number to its parameter's grid, so it can read back a little
+    off. Only objects with float values being verified are read, and a missing or odd grid
+    leaves the fixed tolerance in place.
+    """
+    grids: dict[tuple[str, str], float] = {}
+    seen: set[str] = set()
+    for path, values in expected:
+        floats = [k for k, v in values.items() if isinstance(v, float)]
+        if not floats or path in seen:
+            continue
+        seen.add(path)
+        try:
+            properties = client.get_meta(path).get("properties") or {}
+        except HeadRushError:
+            continue
+        for key in floats:
+            grid = ((properties.get(key) or {}).get("x-options") or {}).get("grid")
+            if isinstance(grid, (int, float)) and not isinstance(grid, bool) and 0 < grid < 1:
+                grids[(path, key)] = float(grid)
+    return grids
 
 
 def _differences(
-    client: HeadRushClient, expected: list[tuple[str, dict[str, Any]]]
+    client: HeadRushClient,
+    expected: list[tuple[str, dict[str, Any]]],
+    grids: dict[tuple[str, str], float] | None = None,
 ) -> list[tuple[str, dict[str, Any]]]:
+    grids = grids or {}
     pending = []
     for path, values in expected:
         actual = client.get_properties(path)
-        wrong = {k: v for k, v in values.items() if not _same(actual.get(k), v)}
+        wrong = {
+            k: v for k, v in values.items() if not _same(actual.get(k), v, grids.get((path, k)))
+        }
         if wrong:
             pending.append((path, wrong))
     return pending
 
 
-def _same(got: Any, wanted: Any) -> bool:
+def _same(got: Any, wanted: Any, grid: float | None = None) -> bool:
     if isinstance(wanted, float):
-        return isinstance(got, (int, float)) and abs(got - wanted) <= _TOLERANCE
+        # Allow a whole grid step, not half. Grid snapping is community-documented, and
+        # nobody has reported whether the pedal rounds to the nearest step or down; the step
+        # is also a float32. One step is the smallest change the pedal can hold anyway.
+        tolerance = max(_TOLERANCE, grid or 0)
+        return isinstance(got, (int, float)) and abs(got - wanted) <= tolerance
     return got == wanted
 
 
 def find_mismatches(
-    client: HeadRushClient, expected: list[tuple[str, dict[str, Any]]]
+    client: HeadRushClient,
+    expected: list[tuple[str, dict[str, Any]]],
+    grids: dict[tuple[str, str], float] | None = None,
 ) -> list[str]:
+    """List values that didn't read back. Floats may differ by up to one grid step."""
+    if grids is None:
+        grids = _grids(client, expected)
     problems = []
-    for path, values in _differences(client, expected):
+    for path, values in _differences(client, expected, grids):
         actual = client.get_properties(path)
         problems += [f"{path}.{k}: wanted {v!r}, got {actual.get(k)!r}" for k, v in values.items()]
     return problems

@@ -14,7 +14,7 @@ from headrush_mcp.client import (
     PolicyError,
     block_path,
 )
-from headrush_mcp.rigs import apply_rig, footswitch_values
+from headrush_mcp.rigs import apply_rig, find_mismatches, footswitch_values
 
 SPEC = {
     "name": "New Rig",
@@ -61,8 +61,13 @@ class FakePedal:
             self.calls.append(path)
             return httpx.Response(200, json={"methodReturnValue": True})
         if path.startswith("/object-meta"):
-            return httpx.Response(200, json={"properties": self.meta[path[len("/object-meta") :]]})
+            target = path[len("/object-meta") :]
+            if target not in self.meta:
+                return httpx.Response(404, json={"desc": "no such object"})
+            return httpx.Response(200, json={"properties": self.meta[target]})
         target = path[len("/object-properties") :]
+        if target not in self.objects:
+            return httpx.Response(404, json={"desc": "no such object"})
         if request.method == "PUT":
             self.calls.append(f"PUT {target}")
             if target != self.drop_writes_to:
@@ -324,3 +329,110 @@ def test_unexpected_paths_are_still_refused(path):
     client = HeadRushClient(host="fake", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
     with pytest.raises(PolicyError):
         client.get_properties(path)
+
+
+def reply(response: httpx.Response) -> HeadRushClient:
+    return HeadRushClient(host="fake", allow_writes=True, transport=httpx.MockTransport(lambda r: response))
+
+
+def test_remote_off_is_explained_with_the_pedals_reason():
+    response = httpx.Response(403, json={"desc": "DataModel: Web access temporarily disabled"})
+    with pytest.raises(HeadRushError, match="HeadRush Remote seems to be off.*Web access temporarily"):
+        reply(response).get_properties(RIGS)
+
+
+def test_pin_approval_is_explained():
+    with pytest.raises(HeadRushError, match="Authorize with PIN.*doesn't do PIN pairing"):
+        reply(httpx.Response(401, text="Unauthorized")).get_properties(RIGS)
+
+
+def test_other_http_errors_keep_their_status():
+    with pytest.raises(HeadRushError) as error:
+        reply(httpx.Response(404, text="nope")).get_properties(RIGS)
+    assert error.value.status == 404
+
+
+@pytest.mark.parametrize("body", [{"text": "OK"}, {}])
+def test_write_replies_that_are_not_json_are_accepted(body):
+    pedal = FakePedal()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, **body) if request.method == "PUT" else pedal(request)
+
+    client = HeadRushClient(host="fake", allow_writes=True, transport=httpx.MockTransport(handler))
+    assert client.set_properties(CHAIN, {"ModuleType1": 2}) is None
+
+
+@pytest.mark.parametrize("response", [httpx.Response(200, text="OK"), httpx.Response(200)])
+def test_read_replies_that_are_not_json_are_errors(response):
+    with pytest.raises(HeadRushError, match="wasn't JSON"):
+        reply(response).get_properties(RIGS)
+
+
+@pytest.mark.parametrize(("status", "message"), [(403, "HeadRush Remote seems to be off"), (500, "500")])
+def test_block_object_check_passes_other_errors_through(status, message):
+    pedal = FakePedal()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/api/v1/object-meta"):
+            return httpx.Response(status, json={})
+        return pedal(request)
+
+    client = HeadRushClient(host="fake", allow_writes=True, transport=httpx.MockTransport(handler))
+    with pytest.raises(HeadRushError, match=message) as error:
+        client.require_block_object("Amp")
+    assert not isinstance(error.value, PolicyError)
+    assert error.value.status == status
+    assert pedal.calls == []
+
+
+def test_a_block_with_no_object_is_refused_before_creating_a_rig():
+    pedal = FakePedal()
+    pedal.objects[BLOCKS]["ModuleTypes"].append("ReValver Amp 2")
+    spec = SPEC | {"blocks": [{"slot": 1, "block": "ReValver Amp 2"}], "footswitches": {}}
+    with pytest.raises(PolicyError, match="no object"):
+        apply_rig(make(pedal), spec, sleep=no_sleep)
+    assert pedal.calls == []
+
+
+def grid_pedal(grid: float | None) -> FakePedal:
+    """A pedal that snaps Bass a little off the written value, as the real grid does."""
+    pedal = FakePedal()
+    if grid is not None:
+        pedal.meta[block_path("Amp")]["Bass"]["x-options"] = {"grid": grid}
+    return pedal
+
+
+def snap_bass(pedal: FakePedal, value: float):
+    def sleep(_: float) -> None:
+        pedal.objects[block_path("Amp")]["Bass"] = value
+
+    return sleep
+
+
+def test_readback_within_one_grid_step_still_saves():
+    pedal = grid_pedal(0.01)
+    result = apply_rig(make(pedal), SPEC, sleep=snap_bass(pedal, 0.408))
+    assert result["saved"] is True and result["mismatches"] == []
+
+
+@pytest.mark.parametrize("grid", [None, 0.01])
+def test_readback_beyond_the_grid_or_tolerance_is_a_mismatch(grid):
+    pedal = grid_pedal(grid)
+    off = 0.408 if grid is None else 0.42
+    result = apply_rig(make(pedal), SPEC, sleep=snap_bass(pedal, off))
+    assert result["saved"] is False
+    assert any("Bass" in m for m in result["mismatches"])
+
+
+def test_grid_check_reads_no_schema_for_integer_values():
+    pedal = FakePedal()
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return pedal(request)
+
+    client = HeadRushClient(host="fake", transport=httpx.MockTransport(handler))
+    assert find_mismatches(client, [(CHAIN, {"ModuleType1": 2})]) == []
+    assert not [p for p in seen if "object-meta" in p]

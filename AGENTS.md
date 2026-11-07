@@ -16,11 +16,18 @@ This server can change a real pedal that someone may be playing. It's meant to b
 ## Device behaviour
 
 - Creating a rig and placing blocks finish asynchronously and can undo earlier writes. Verify after a settle period (`rigs.py`).
-- Footswitches 1-3 and 4-6 are separate banks. A correct assignment can still be out of reach on the bank showing.
+- Footswitches 1-3 and 4-6 are separate banks. Switches 4-6 are only reachable when a hold is set to Bank A/B in Global Settings, so a correct assignment can still be out of reach.
+- Never write a `ModuleType` whose `/Evil/Engine/Patch/<Name>` object is missing, even if `ModuleTypes` lists it. One crashed a Core's audio engine. Check the object exists first (object-meta or the live subtree; `HeadRushClient.require_block_object` uses object-meta).
+- Global settings are read-only by policy. They affect every rig, so tell the user what to change on the pedal instead.
+- The pedal is reported to snap values to each parameter's `grid` (community, Core), so compare read-backs within one step.
 - Other clients and the footswitches can change state at any time, so re-read state rather than assuming it.
 - You can verify settings, but not sound. Don't claim a tone is right; ask the user to listen.
 
-See `docs/api.md` for the API and `src/headrush_mcp/rig-specs.md` for the spec format.
+See `docs/api.md` for the API, `docs/midi.md` for MIDI control and `src/headrush_mcp/rig-specs.md` for the spec format.
+
+## Sources
+
+Cite the public [User Guide](https://cdn.inmusicbrands.com/Software/SGEE/52/HeadRush%20Flex%20Prime%20-%20User%20Guide%20-%20v5.2.0.pdf) with page numbers, never a local copy or text extract, as those aren't in the repo. Mark community findings and inferences as such, and note which model they were tested on.
 
 ## Before committing
 
