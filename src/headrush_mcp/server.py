@@ -197,8 +197,7 @@ def get_footswitches() -> dict[str, Any]:
 
     Switches 1-3 and 4-6 are separate banks. Switches 4-6 are only reachable by holding a
     switch whose hold function is Bank A/B, and holds don't work with Footswitch Function set
-    to On Press; `warnings` says when either gets in the way. These warnings rely on setting
-    names not yet confirmed on a pedal, so check Global Settings if one looks wrong.
+    to On Press; `warnings` says when either gets in the way.
     `auto_assign_footswitches` is whether the pedal puts newly placed blocks on free switches,
     or null if settings couldn't be read.
 

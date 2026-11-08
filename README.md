@@ -110,8 +110,8 @@ Write tools change the pedal immediately, so a rig can change while you're playi
 
 ## Good to know
 
-- **Footswitch banks:** switches 1-3 and 4-6 are the two banks (probably A and B; the pedal's labelling isn't confirmed). Switches 4-6 are off by default, so see [Reaching switches 4-6](#reaching-switches-4-6). Put what you use most on the same bank.
-- **Auto-assign:** with **Auto Assign Footswitches** on in Global Settings, the pedal gives each newly placed block the next free switch. `set_slot_block` and `create_rig` warn when that may take a switch, and `get_footswitches` reports the setting. These rely on a setting name not yet confirmed on a pedal, so check Global Settings if one looks wrong.
+- **Footswitch banks:** switches 1-3 and 4-6 are the two banks, and software can't tell which one the pedal is showing. Switches 4-6 are off by default, so see [Reaching switches 4-6](#reaching-switches-4-6). Put what you use most on the same bank.
+- **Auto-assign:** with **Auto Assign Footswitches** on in Global Settings, the pedal gives each newly placed block the next free switch. `set_slot_block` and `create_rig` warn when that may take a switch, and `get_footswitches` reports the setting.
 - **Numbers are normalized:** parameters are 0-1 on the wire, whatever range `describe_block` displays. See the [API reference](docs/api.md) for converting values.
 - **Second instances:** names ending in ` 2`, like `Amp 2`, let the same block type appear twice. They're how you run two amps.
 - **Hearing the result:** the server can verify settings, but not sound, so you'll be the judge.
@@ -127,7 +127,7 @@ The Flex Prime has three switches and two banks of three assignments per rig. To
 
 Now hold that switch to flip between banks, live or while editing in Hardware Assign. The trade-off is losing hold-for-tuner or hold-for-looper on that switch. The tuner is still in the menu, and **Global Settings > Expression Pedal** can open it when a volume pedal reaches 0%. MIDI CC 20 also flips the bank. These settings affect every rig, and this server only reads them.
 
-`get_footswitches` warns when switches 4-6 are assigned but can't be reached, or when On Press has disabled holds. These warnings rely on setting names that haven't been confirmed on a pedal yet, so check Global Settings if one looks wrong. They're left out when the settings can't be read or their options aren't named.
+`get_footswitches` warns when switches 4-6 are assigned but can't be reached, or when On Press has disabled holds. They're left out when the settings can't be read or their options aren't named.
 
 ## Example rigs
 

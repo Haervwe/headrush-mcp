@@ -1,4 +1,5 @@
 import json
+from math import log, sqrt
 from pathlib import Path
 
 import httpx
@@ -14,7 +15,7 @@ from headrush_mcp.client import (
     PolicyError,
     block_path,
 )
-from headrush_mcp.rigs import apply_rig, find_mismatches, footswitch_values
+from headrush_mcp.rigs import _wire_step, apply_rig, find_mismatches, footswitch_values
 
 SPEC = {
     "name": "New Rig",
@@ -411,18 +412,59 @@ def snap_bass(pedal: FakePedal, value: float):
 
 
 def test_readback_within_one_grid_step_still_saves():
-    pedal = grid_pedal(0.01)
+    pedal = grid_pedal(1.0)  # 1 of 0-100, so 0.01 on the wire.
     result = apply_rig(make(pedal), SPEC, sleep=snap_bass(pedal, 0.408))
     assert result["saved"] is True and result["mismatches"] == []
 
 
-@pytest.mark.parametrize("grid", [None, 0.01])
+@pytest.mark.parametrize("grid", [None, 1.0])
 def test_readback_beyond_the_grid_or_tolerance_is_a_mismatch(grid):
     pedal = grid_pedal(grid)
     off = 0.408 if grid is None else 0.42
     result = apply_rig(make(pedal), SPEC, sleep=snap_bass(pedal, off))
     assert result["saved"] is False
     assert any("Bass" in m for m in result["mismatches"])
+
+
+@pytest.mark.parametrize(
+    ("schema", "wanted", "step"),
+    [
+        # A 0.1 dB grid on a -12 to 12 dB range, as on the real Amp.PreGain.
+        ({"minimum": -12, "maximum": 12, "x-options": {"grid": 0.1}}, 0.5, 0.1 / 24),
+        ({"minimum": 0, "maximum": 100, "x-options": {"grid": 1.0}}, 0.4, 0.01),
+    ],
+)
+def test_wire_step_converts_a_linear_grid_from_display_units(schema, wanted, step):
+    assert _wire_step(schema, wanted) == pytest.approx(step)
+
+
+def test_wire_step_follows_the_squared_curve():
+    schema = {"minimum": 0.25, "maximum": 20, "x-options": {"grid": 0.01, "normalizeAlgo": 5}}
+    # 0.5 on the wire is 5.1875 Hz, and one step down is the wider side of a squared curve.
+    expected = 0.5 - sqrt((5.1775 - 0.25) / 19.75)
+    assert _wire_step(schema, 0.5) == pytest.approx(expected)
+
+
+def test_wire_step_follows_the_exponential_curve():
+    schema = {"minimum": 0.1, "maximum": 10, "x-options": {"grid": 0.1, "normalizeAlgo": 6}}
+    # 0.5 on the wire is 1 Hz, and one step down is the wider side.
+    expected = 0.5 - log(0.9 / 0.1) / log(100)
+    assert _wire_step(schema, 0.5) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {},
+        {"minimum": 0, "maximum": 1, "x-options": {}},
+        {"minimum": 0, "maximum": 1, "x-options": {"grid": 0}},
+        {"minimum": 1, "maximum": 1, "x-options": {"grid": 0.1}},
+        {"minimum": 0, "maximum": 10, "x-options": {"grid": 0.1, "normalizeAlgo": 6}},
+        {"minimum": 0, "maximum": 10, "x-options": {"grid": 0.1, "normalizeAlgo": 10}},
+    ],
+)
+def test_wire_step_is_unknown_when_it_cant_be_worked_out(schema):
+    assert _wire_step(schema, 0.5) is None
 
 
 def test_grid_check_reads_no_schema_for_integer_values():

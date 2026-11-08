@@ -16,6 +16,7 @@ Unofficial notes from observing the editor on a Flex Prime, firmware `5.2.0.2a40
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/subtree` | Full state and schema, about 1 MB and 290 objects |
+| GET | `/subtree<path>` | The same, for one object |
 | GET | `/object-properties<path>` | Read an object |
 | PUT | `/object-properties<path>` | Write properties, with a JSON body of properties |
 | GET | `/object-meta<path>` | Read an object's schema |
@@ -28,16 +29,15 @@ Unofficial notes from observing the editor on a Flex Prime, firmware `5.2.0.2a40
 
 | Status | Meaning |
 |---|---|
-| 401 | Authorize with PIN is on and this client isn't paired |
+| 401 | Authorize with PIN is on and this client isn't paired. The editor reads `pairState`, `pairPin` and `pairError` from the body |
 | 403 | HeadRush Remote is off. The body has a `desc` field, `DataModel: Web access temporarily disabled`. Seen on a Core at 5.1.0, where `/subtree` returned 404 instead (community, [ToneCommand](https://github.com/monzta1/ToneCommand/blob/main/docs/HEADRUSH-HARDWARE-FINDINGS.md)) |
 | 504 | A method call with the wrong arguments |
 
 Setting **New Connection Attempts** to **Deny** makes the pedal reject new connection attempts (User Guide p.61). That probably shows up as a connection failure rather than an HTTP error (untested).
 
-The PIN exchange on the wire is unverified, and two community clients disagree:
+Going by the editor's JavaScript, on a 401 whose `pairState` is `notPaired`, it sends `POST /api/auth` with `{}` and shows the returned `pairPin` while `pairState` is `pending`. A `pairError` of `denied`, `blocked` or `disabled` stops it. This wasn't exercised, since the tested pedal has the PIN off.
 
-- [RushLink](https://github.com/Rush-Link/RushLink-App/blob/main/src-tauri/src/lib.rs) sends `POST /api/auth` with `{"pin": ...}`, keeps no cookies, and opens the WebSocket without auth.
-- [rigsmith](https://github.com/Gavinboley/rigsmith/blob/HEAD/rigsmith/device/client.py) polls an empty POST and uses a `sessionID` cookie, on a Core.
+Community clients differ: [RushLink](https://github.com/Rush-Link/RushLink-App/blob/main/src-tauri/src/lib.rs) posts `{"pin": ...}` instead, and [rigsmith](https://github.com/Gavinboley/rigsmith/blob/HEAD/rigsmith/device/client.py) polls an empty POST and keeps a `sessionID` cookie, on a Core.
 
 This server doesn't pair. It reports a 401 and leaves approval to the user.
 
@@ -65,9 +65,18 @@ normalized = (display - minimum) / (maximum - minimum)
 
 For example, on `AIR Delay.Delay` (1-4000 ms), 381 ms is `(381 - 1) / 3999 = 0.095`.
 
-Times, percentages and decibels were linear wherever checked. Some frequency and rate parameters aren't: `Multi Chorus.Rate` appears exponential. The editor has several curves, so check those on the pedal.
+A parameter with `x-options.normalizeAlgo` in its schema uses a curve instead. These are the editor's formulas, where `v` is the 0-1 value:
 
-Each parameter's schema has an opaque curve id in `x-options.normalizeAlgo` and a step size, `grid`. The curves for each id aren't decoded. The pedal snaps written values to the grid, so a read-back can differ slightly from what was written, and out-of-range values aren't clamped (community, tested on a Core: ToneCommand). Compare read-backs within one grid step, not as exact floats.
+| `normalizeAlgo` | Curve | Display value |
+|---|---|---|
+| none or `0` | Linear | `minimum + (maximum - minimum) * v` |
+| `5` | Squared | `minimum + (maximum - minimum) * v * v` |
+| `6` | Exponential | `minimum * (maximum / minimum) ** v` |
+| `10` | Reverb time | `(0.45 + v) / (1 - v)`, and infinite above 0.99 |
+
+Those are the only ids on firmware `5.2.0.2a405ee`, with `6` on most frequency and rate parameters, like `Multi Chorus.Rate`, and `10` on `AIR Reverb.Time`. The editor also defines ids 1-4 and 7-9.
+
+`x-options.grid` is the step size **in displayed units**, like 1 for a 0-100 knob or 0.1 for a dB value, so convert it through the curve before comparing 0-1 values. The pedal is reported to snap written values to the grid and not to clamp out-of-range values (community, tested on a Core: ToneCommand; not tested here). Compare read-backs within one grid step, not as exact floats.
 
 Integers such as `Amp.Type` are indexes into `x-options.strings` in the schema, and aren't normalized.
 
@@ -86,7 +95,7 @@ Integers such as `Amp.Type` are indexes into `x-options.strings` in the schema, 
 | `/Evil/Engine/FootSwitch` | Footswitches and scenes |
 | `/Evil/Engine/CPUMeter` | `CPUTimeSmoothed` |
 
-`ModuleTypes` lists `ReValver Amp 2` and `C-Verb 2`, but neither has an object on firmware `5.2.0.2a405ee`, so reading them returns a 404. **Don't write a module type that has no object.** On a Core at 5.1.0, writing one crashed the audio engine once, and others reverted or stuck as an empty slot (community, ToneCommand). `Neural Amp Modeler 2` only gained an object in 5.2 (community, ToneCommand). Check the `/Evil/Engine/Patch/<Name>` object exists before placing a block, with object-meta or the live subtree; the server's `require_block_object` uses object-meta and treats a 404 as missing. Other names can contain apostrophes and parentheses, like `Sher'ff` and `IR (1024)`, which stay as they are in the path.
+`ModuleTypes` lists `ReValver Amp 2` and `C-Verb 2`, but neither has an object on firmware `5.2.0.2a405ee`, so reading them returns a 404. **Don't write a module type that has no object.** On a Core at 5.1.0, writing one crashed the audio engine once, and others reverted or stuck as an empty slot (community, ToneCommand). `Neural Amp Modeler 2` has an object on 5.2, with its own second-capture fields like `LoadedClone2`, `LightMode2` and `OutputMode2`. It reportedly had none before 5.2 (community, ToneCommand). Check the `/Evil/Engine/Patch/<Name>` object exists before placing a block, with object-meta or the live subtree; the server's `require_block_object` uses object-meta and treats a 404 as missing. Other names can contain apostrophes and parentheses, like `Sher'ff` and `IR (1024)`, which stay as they are in the path.
 
 ## Installed models and files
 
@@ -137,17 +146,20 @@ Keys on `/Evil/Engine/FootSwitch`, for switch `n` from 1 to 6:
 | `SceneDoubleSwitch<n>`, `ScenePathSwitch<n>` | `0` no change, `1` A, `2` B |
 | `Scene<n>Slot<slot>Preset` | Block preset to recall, or `No Preset` |
 | `MacroColour<n>` | Scene color, 0-13 |
-| `SceneMIDIOut<n>` | MIDI out, encoding unknown (see below) |
-| `SceneNumberOfStates<n>`, `SceneState<n>` | Number of switch states, and the current one |
+| `SceneMIDIOut<n>` | Name of a MIDI Out preset, or empty or `--` for none (see below) |
+| `SceneNumberOfStates<n>` | `1` or `2` |
+| `SceneState<n>` | On a two-state scene, the state in use: `0` first, `1` second. It can read `1` on a one-state scene |
+| `State2...` | The second state's versions: `State2Scene<n>_<slot>_Mode`, `State2Scene<n>Slot<slot>Preset`, `State2MacroColour<n>`, `State2SceneDoubleSwitch<n>`, `State2ScenePathSwitch<n>`, `State2SceneMIDIOut<n>` |
+| `LastScene`, `LastSceneState` | The last scene fired, counting from 0, and its state |
 | `AnySwitchDoubling` | Whether any block is switching A/B. The editor disables a scene's doubling control without it |
 
-Switches 1-3 and 4-6 are separate banks, probably labelled A and B (unconfirmed on the pedal). Switches 4-6 are only reachable when a hold is set to Bank A/B (see [Global settings](#global-settings)).
+Switches 1-3 and 4-6 are separate banks. Switches 4-6 are only reachable when a hold is set to Bank A/B (see [Global settings](#global-settings)). No object on firmware `5.2.0.2a405ee` has a field named for the current bank, and the editor's code never mentions banks, so software probably can't tell which bank the pedal is showing, or which set it calls A.
 
 The pedal keeps the old `Module<n>` and `Operation<n>` when a switch becomes a scene, so ignore them on scene switches.
 
 ### Scene states
 
-A scene can have two states on one switch, and each press alternates between them (User Guide p.32). Each state has its own On/Off/No Change per block and LED colour (p.32) and MIDI out (p.35); presets, doubling and path are probably set up like any scene. The "+" next to Switch State 1 in the editor adds state 2, which matches the `createNewSceneState` method and the `State2...` keys. The maximum is two. On the older HeadRush FX, No Change in state 2 is relative to state 1 ([support article](https://support.headrushfx.com/en/support/solutions/articles/69000828931-headrush-fx-2-5-creating-and-editing-dual-scenes)), and probably works the same here.
+A scene can have two states on one switch, and each press alternates between them (User Guide p.32). Each state has its own On/Off/No Change per block and LED colour (p.32) and MIDI out (p.35); presets, doubling and path are probably set up like any scene. The editor adds state 2 by calling `createNewSceneState` with `[zero-based switch, 0]`, then writing `SceneNumberOfStates<n>` as `2`. Selecting a state to edit writes `SceneState<n>`. The maximum is two. On the older HeadRush FX, No Change in state 2 is relative to state 1 ([support article](https://support.headrushfx.com/en/support/solutions/articles/69000828931-headrush-fx-2-5-creating-and-editing-dual-scenes)), and probably works the same here.
 
 This server doesn't create or edit state 2. Community notes from a Core ([headrush-remote-buttons](https://github.com/thomasborgogno/headrush-remote-buttons)): firing `SceneActive<n>=true` on an already active two-state scene toggles `SceneState<n>` between 0 and 1, and that client never writes `false`. Untested here.
 
@@ -159,26 +171,26 @@ Since firmware 4.1.0, a scene, a footswitch or a rig load can send up to five MI
 - Control Change: channel, CC number, value
 - Note On or Note Off: channel, note, velocity
 
-Commands are saved as named MIDI Out presets, and a scene's SWITCH STATE picks which state sends them. How `SceneMIDIOut<n>` encodes this is unknown. It may refer to a preset under `/Evil/Engine/MIDIOutCtrl`, but that's a guess.
+Commands are saved as named MIDI Out presets, and `SceneMIDIOut<n>` holds the preset's name, going by the editor's JavaScript. A footswitch stores one under its `MIDI Out` operation, and a rig in `Rig.MIDIOut`. `/Evil/Engine/MIDIOutCtrl` is the editing buffer, with `Type#`, `Chan#`, `MSB#`, `LSB#`, `Val1#` and `Val2#` for messages 1-5 and `Alt` versions for the second switch state. It has `presets`, `loadPreset`, `createPreset`, `saveCurrentPreset`, `renamePreset`, `deletePreset` and `test` methods, none of which this server calls.
 
 ### Doubling
 
-On `Amp` and `Cab`, `Doubling` turns doubling on, and `DoubleMode` true means Switch rather than Stereo. Stereo runs both sides. Switch runs one, and the guide only offers a footswitch (`Doubling: A <Switch> B`, or `Both: A-B-C-D` round-robin across two split paths) or a scene's doubling switch to change it (User Guide p.11, p.32). That probably explains why no field reports the active side. `LastScene` gives the last scene fired, counting from 0.
+On `Amp` and `Cab`, `Doubling` turns doubling on, and `DoubleMode` true means Switch rather than Stereo. Stereo runs both sides. Switch runs one, and the guide only offers a footswitch (`Doubling: A <Switch> B`, or `Both: A-B-C-D` round-robin across two split paths) or a scene's doubling switch to change it (User Guide p.11, p.32). No field reports the active side.
 
 `Path Mix: A <Switch> B` on a footswitch mutes one path of a split routing, and an expression pedal can crossfade the paths with `Mix > A <Crossfade> B` (User Guide p.15).
 
 ## Global settings
 
-Global settings are on `/Evil/Engine/Settings/General`. They affect every rig, and this server only reads them. The pairing of keys to the guide's settings (User Guide p.58) is inferred from names, not confirmed on the pedal:
+Global settings are on `/Evil/Engine/Settings/General`. They affect every rig, and this server only reads them. The object's own `labels` and `order` tie each key to the setting named in the User Guide (p.58):
 
 | Key | Setting in Global Settings > General | Effect |
 |---|---|---|
-| `TunerFSAssignment` | Assign Tuner Footswitch | Switch 3's hold: Tuner, Bank A/B, Drum Machine or Practice Tool |
-| `LooperFSAssignment` | Assign Looper Footswitch | Switch 2's hold: Looper, Bank A/B, Drum Machine or Practice Tool. Probably added in 5.0, as the 4.x guides don't list it |
-| `OnPressFS` | Footswitch Function | On Press disables all hold functions, including Bank A/B |
+| `TunerFSAssignment` | Assign Tuner Footswitch | Switch 3's hold, index into `Tuner`, `Bank A/B`, `Drums`, `Practice` |
+| `LooperFSAssignment` | Assign Looper Footswitch | Switch 2's hold, index into `Looper`, `Bank A/B`, `Drums`, `Practice`. Probably added in 5.0, as the 4.x guides don't list it |
+| `OnPressFS` | Footswitch Functions | Boolean: `false` On Release, `true` On Press, which disables all hold functions, including Bank A/B |
 | `AutoAssignments` | Auto Assign Footswitches | A newly placed block takes the next free switch |
 
-The enum values behind these keys haven't been read yet. `get_footswitches` only warns about the holds when the schema names their options, judges On Press by its option name when there is one, and reports `auto_assign_footswitches` as null when the key is missing.
+`get_footswitches` only warns about the holds when the schema names their options, judges On Press by its option name when there is one, and reports `auto_assign_footswitches` as null when the key is missing.
 
 ## State-changing methods to be careful with
 

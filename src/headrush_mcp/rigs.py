@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from math import log, sqrt
 from typing import Any
 
 from .client import (
@@ -19,6 +20,17 @@ from .client import (
 )
 
 _TOLERANCE = 0.002
+_EXPONENTIAL = 6
+# The official editor's curves by normalizeAlgo, as (0-1 to displayed, displayed to 0-1).
+# 0 is linear, and 10 (reverb time) is left to the fixed tolerance.
+_CURVES: dict[int, tuple[Callable[[float, float, float], float], ...]] = {
+    0: (lambda v, lo, hi: lo + (hi - lo) * v, lambda d, lo, hi: (d - lo) / (hi - lo)),
+    5: (lambda v, lo, hi: lo + (hi - lo) * v * v, lambda d, lo, hi: sqrt((d - lo) / (hi - lo))),
+    _EXPONENTIAL: (
+        lambda v, lo, hi: lo * (hi / lo) ** v,
+        lambda d, lo, hi: log(d / lo) / log(hi / lo),
+    ),
+}
 _ATTEMPTS = 6
 _SETTLE_SECONDS = 1.5
 _MODE_TOGGLE = 0
@@ -317,29 +329,52 @@ def _write_until_stable(
 ) -> list[str]:
     """Write values, then rewrite whatever didn't stick until a full pass holds."""
     pending = expected
-    grids = _grids(client, expected)
+    steps = _steps(client, expected)
     for _ in range(_ATTEMPTS):
         for path, values in pending:
             # One write per key, in the order the official editor uses.
             for key, value in values.items():
                 client.set_properties(path, {key: value})
         sleep(_SETTLE_SECONDS)
-        pending = _differences(client, expected, grids)
+        pending = _differences(client, expected, steps)
         if not pending:
             return []
-    return find_mismatches(client, expected, grids)
+    return find_mismatches(client, expected, steps)
 
 
-def _grids(
+def _wire_step(schema: dict[str, Any], wanted: float) -> float | None:
+    """Return one grid step around a 0-1 value, in 0-1 units, or None if it can't be worked out.
+
+    The schema's grid is in displayed units, such as 0.1 dB, so it depends on the range and curve.
+    """
+    options = schema.get("x-options") or {}
+    algo = options.get("normalizeAlgo") or 0
+    grid, low, high = options.get("grid"), schema.get("minimum"), schema.get("maximum")
+    numbers = (grid, low, high)
+    if algo not in _CURVES or not all(
+        isinstance(n, (int, float)) and not isinstance(n, bool) for n in numbers
+    ):
+        return None
+    if grid <= 0 or high <= low or (algo == _EXPONENTIAL and low <= 0):
+        return None
+    to_display, to_wire = _CURVES[algo]
+    display = to_display(wanted, low, high)
+    return max(
+        abs(to_wire(min(display + grid, high), low, high) - wanted),
+        abs(to_wire(max(display - grid, low), low, high) - wanted),
+    )
+
+
+def _steps(
     client: HeadRushClient, expected: list[tuple[str, dict[str, Any]]]
 ) -> dict[tuple[str, str], float]:
-    """Read each float parameter's grid step from the schema, one meta read per object.
+    """Work out each float parameter's grid step from the schema, one meta read per object.
 
-    The pedal snaps a written number to its parameter's grid, so it can read back a little
-    off. Only objects with float values being verified are read, and a missing or odd grid
-    leaves the fixed tolerance in place.
+    The pedal is reported to snap a written number to its grid, so it can read back a little
+    off. Only objects with float values being verified are read, and a step that can't be
+    worked out leaves the fixed tolerance in place.
     """
-    grids: dict[tuple[str, str], float] = {}
+    steps: dict[tuple[str, str], float] = {}
     seen: set[str] = set()
     for path, values in expected:
         floats = [k for k, v in values.items() if isinstance(v, float)]
@@ -351,35 +386,34 @@ def _grids(
         except HeadRushError:
             continue
         for key in floats:
-            grid = ((properties.get(key) or {}).get("x-options") or {}).get("grid")
-            if isinstance(grid, (int, float)) and not isinstance(grid, bool) and 0 < grid < 1:
-                grids[(path, key)] = float(grid)
-    return grids
+            step = _wire_step(properties.get(key) or {}, values[key])
+            if step is not None:
+                steps[(path, key)] = step
+    return steps
 
 
 def _differences(
     client: HeadRushClient,
     expected: list[tuple[str, dict[str, Any]]],
-    grids: dict[tuple[str, str], float] | None = None,
+    steps: dict[tuple[str, str], float] | None = None,
 ) -> list[tuple[str, dict[str, Any]]]:
-    grids = grids or {}
+    steps = steps or {}
     pending = []
     for path, values in expected:
         actual = client.get_properties(path)
         wrong = {
-            k: v for k, v in values.items() if not _same(actual.get(k), v, grids.get((path, k)))
+            k: v for k, v in values.items() if not _same(actual.get(k), v, steps.get((path, k)))
         }
         if wrong:
             pending.append((path, wrong))
     return pending
 
 
-def _same(got: Any, wanted: Any, grid: float | None = None) -> bool:
+def _same(got: Any, wanted: Any, step: float | None = None) -> bool:
     if isinstance(wanted, float):
-        # Allow a whole grid step, not half. Grid snapping is community-documented, and
-        # nobody has reported whether the pedal rounds to the nearest step or down; the step
-        # is also a float32. One step is the smallest change the pedal can hold anyway.
-        tolerance = max(_TOLERANCE, grid or 0)
+        # Allow a whole grid step, not half: snapping is community-documented, and nobody
+        # has reported whether the pedal rounds to the nearest step or down.
+        tolerance = max(_TOLERANCE, step or 0)
         return isinstance(got, (int, float)) and abs(got - wanted) <= tolerance
     return got == wanted
 
@@ -387,13 +421,13 @@ def _same(got: Any, wanted: Any, grid: float | None = None) -> bool:
 def find_mismatches(
     client: HeadRushClient,
     expected: list[tuple[str, dict[str, Any]]],
-    grids: dict[tuple[str, str], float] | None = None,
+    steps: dict[tuple[str, str], float] | None = None,
 ) -> list[str]:
     """List values that didn't read back. Floats may differ by up to one grid step."""
-    if grids is None:
-        grids = _grids(client, expected)
+    if steps is None:
+        steps = _steps(client, expected)
     problems = []
-    for path, values in _differences(client, expected, grids):
+    for path, values in _differences(client, expected, steps):
         actual = client.get_properties(path)
         problems += [f"{path}.{k}: wanted {v!r}, got {actual.get(k)!r}" for k, v in values.items()]
     return problems

@@ -95,9 +95,9 @@ Scene names display in capitals on the official editor, so use capitals for cons
 
 `set_scene` takes the same fields, and `get_scene` returns them. With `set_scene`, `blocks` is optional, and anything you leave out keeps its current value, so you can change just `doubling`. A scene's second switch state and MIDI out can't be set here. Do those on the pedal.
 
-Switches 1-3 and 4-6 are separate banks, and each switch has its own scene. Two switches with the same label can still behave differently, so check both. Switches 4-6 can only be reached if the user has set a hold to Bank A/B in Global Settings, and `get_footswitches` warns if not. Its warnings rely on setting names not yet confirmed on a pedal, so check Global Settings if one looks wrong. When switches 4-6 can't be reached, put what matters on 1-3.
+Switches 1-3 and 4-6 are separate banks, and each switch has its own scene. Two switches with the same label can still behave differently, so check both. Switches 4-6 can only be reached if the user has set a hold to Bank A/B in Global Settings, and `get_footswitches` warns if not. When switches 4-6 can't be reached, put what matters on 1-3.
 
-If Auto Assign Footswitches is on, the pedal gives each new block the next free switch, and `create_rig` warns when that may happen (the setting name isn't confirmed on a pedal yet). Assign every switch you care about in the spec.
+If Auto Assign Footswitches is on, the pedal gives each new block the next free switch, and `create_rig` warns when that may happen. Assign every switch you care about in the spec.
 
 ## File and block limits
 
