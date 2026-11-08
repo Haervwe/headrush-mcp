@@ -130,6 +130,42 @@ def test_get_scene_returns_the_scene_in_the_shape_set_scene_uses(pedal):
     }
 
 
+def test_get_scene_returns_a_second_state(pedal):
+    fs = pedal.objects[FOOTSWITCH]
+    fs |= {
+        "SceneNumberOfStates4": 2,
+        "SceneState4": 1,
+        "State2SceneDoubleSwitch4": 1,
+        "State2ScenePathSwitch4": 2,
+        "State2MacroColour4": 9,
+        "State2SceneMIDIOut4": "Lead On",
+    }
+    for slot in range(1, 15):
+        block = {1: "Amp", 3: "Delay"}.get(slot, "Empty Slot")
+        fs |= {f"State2Scene4_{slot}_Effect": block, f"State2Scene4_{slot}_Mode": 0, f"State2Scene4Slot{slot}Preset": "No Preset"}
+    fs |= {"State2Scene4_1_Mode": 2, "State2Scene4_3_Mode": 1, "State2Scene4Slot3Preset": "Long"}
+
+    scene = call("get_scene", switch=4)
+
+    assert scene["blocks"] == {"Amp": "on", "Delay": "off"}
+    assert scene["states"] == 2
+    assert scene["current_state"] == 2
+    assert scene["second_state"] == {
+        "blocks": {"Amp": "off", "Delay": "on"},
+        "doubling": "A",
+        "path": "B",
+        "presets": {"Delay": "Long"},
+        "color": 9,
+        "midi_out": "Lead On",
+    }
+    assert pedal.puts == []
+
+
+def test_get_scene_reports_the_first_state_as_current(pedal):
+    pedal.objects[FOOTSWITCH] |= {"SceneNumberOfStates4": 2, "SceneState4": 0}
+    assert call("get_scene", switch=4)["current_state"] == 1
+
+
 def test_get_scene_refuses_a_switch_that_is_not_a_scene(pedal):
     with pytest.raises(ToolError, match="isn't a scene"):
         call("get_scene", switch=1)

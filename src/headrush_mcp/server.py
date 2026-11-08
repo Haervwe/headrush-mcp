@@ -237,8 +237,10 @@ def get_footswitches() -> dict[str, Any]:
 def get_scene(switch: int) -> dict[str, Any]:
     """Read a scene on footswitch 1-6: blocks, doubling, path, presets, color and MIDI out.
 
-    Uses the same shape as set_scene. `states` of 2 means the switch also has a second state,
-    which this server can't read or change. The pedal doesn't report which A/B side is active.
+    Uses the same shape as set_scene. When `states` is 2, each press alternates between two
+    states: the top-level fields are the first, `second_state` holds the second, and
+    `current_state` is 1 or 2. The second state is read-only here. The pedal doesn't report
+    which A/B side is active.
     """
     return read_scene(client, switch)
 

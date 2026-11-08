@@ -161,7 +161,7 @@ The pedal keeps the old `Module<n>` and `Operation<n>` when a switch becomes a s
 
 A scene can have two states on one switch, and each press alternates between them (User Guide p.32). Each state has its own On/Off/No Change per block and LED colour (p.32) and MIDI out (p.35); presets, doubling and path are probably set up like any scene. The editor adds state 2 by calling `createNewSceneState` with `[zero-based switch, 0]`, then writing `SceneNumberOfStates<n>` as `2`. Selecting a state to edit writes `SceneState<n>`. The maximum is two. On the older HeadRush FX, No Change in state 2 is relative to state 1 ([support article](https://support.headrushfx.com/en/support/solutions/articles/69000828931-headrush-fx-2-5-creating-and-editing-dual-scenes)), and probably works the same here.
 
-This server doesn't create or edit state 2. Community notes from a Core ([headrush-remote-buttons](https://github.com/thomasborgogno/headrush-remote-buttons)): firing `SceneActive<n>=true` on an already active two-state scene toggles `SceneState<n>` between 0 and 1, and that client never writes `false`. Untested here.
+This server reads state 2 through `get_scene`, but doesn't create or edit it. Community notes from a Core ([headrush-remote-buttons](https://github.com/thomasborgogno/headrush-remote-buttons)): firing `SceneActive<n>=true` on an already active two-state scene toggles `SceneState<n>` between 0 and 1, and that client never writes `false`. Untested here.
 
 ### Scene MIDI out
 

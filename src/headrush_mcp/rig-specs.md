@@ -93,7 +93,7 @@ Check the sound in mono if you pan hard, as it depends on how your output is con
 
 Scene names display in capitals on the official editor, so use capitals for consistency.
 
-`set_scene` takes the same fields, and `get_scene` returns them. With `set_scene`, `blocks` is optional, and anything you leave out keeps its current value, so you can change just `doubling`. A scene's second switch state and MIDI out can't be set here. Do those on the pedal.
+`set_scene` takes the same fields, and `get_scene` returns them. With `set_scene`, `blocks` is optional, and anything you leave out keeps its current value, so you can change just `doubling`. A scene's second switch state and MIDI out can't be set here, so do those on the pedal. `get_scene` shows a second state under `second_state`, with the same fields.
 
 Switches 1-3 and 4-6 are separate banks, and each switch has its own scene. Two switches with the same label can still behave differently, so check both. Switches 4-6 can only be reached if the user has set a hold to Bank A/B in Global Settings, and `get_footswitches` warns if not. When switches 4-6 can't be reached, put what matters on 1-3.
 

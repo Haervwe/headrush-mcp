@@ -206,6 +206,30 @@ def auto_assign_warnings(client: HeadRushClient) -> list[str]:
     ]
 
 
+def _read_scene_state(fs: dict[str, Any], switch: int, prefix: str = "") -> dict[str, Any]:
+    """Read one state of a scene. The second state's keys start with State2."""
+    states = {value: name for name, value in _SCENE_STATES.items()}
+    sides = {value: name for name, value in _SCENE_SIDES.items()}
+    blocks = {}
+    presets = {}
+    for slot in range(1, 15):
+        block = fs.get(f"{prefix}Scene{switch}_{slot}_Effect")
+        if not block or block == EMPTY_SLOT:
+            continue
+        blocks[block] = states.get(fs.get(f"{prefix}Scene{switch}_{slot}_Mode"), "nochange")
+        preset = fs.get(f"{prefix}Scene{switch}Slot{slot}Preset")
+        if preset and preset != _NO_PRESET:
+            presets[block] = preset
+    return {
+        "blocks": blocks,
+        "doubling": sides.get(fs.get(f"{prefix}SceneDoubleSwitch{switch}"), "nochange"),
+        "path": sides.get(fs.get(f"{prefix}ScenePathSwitch{switch}"), "nochange"),
+        "presets": presets,
+        "color": fs.get(f"{prefix}MacroColour{switch}"),
+        "midi_out": fs.get(f"{prefix}SceneMIDIOut{switch}"),
+    }
+
+
 def read_scene(client: HeadRushClient, switch: int) -> dict[str, Any]:
     """Read a scene in the same shape set_scene and rig specs use."""
     if switch not in range(1, 7):
@@ -213,30 +237,17 @@ def read_scene(client: HeadRushClient, switch: int) -> dict[str, Any]:
     fs = client.get_properties(FOOTSWITCH)
     if fs.get(f"ModeNew{switch}") != _MODE_SCENE:
         raise HeadRushError(f"Footswitch {switch} isn't a scene")
-    states = {value: name for name, value in _SCENE_STATES.items()}
-    sides = {value: name for name, value in _SCENE_SIDES.items()}
-    blocks = {}
-    presets = {}
-    for slot in range(1, 15):
-        block = fs.get(f"Scene{switch}_{slot}_Effect")
-        if not block or block == EMPTY_SLOT:
-            continue
-        blocks[block] = states.get(fs.get(f"Scene{switch}_{slot}_Mode"), "nochange")
-        preset = fs.get(f"Scene{switch}Slot{slot}Preset")
-        if preset and preset != _NO_PRESET:
-            presets[block] = preset
-    return {
+    scene = {
         "switch": switch,
         "name": fs.get(f"UserFootSwitchText{switch}") or fs.get(f"FootSwitchText{switch}"),
         "active": fs.get(f"SceneActive{switch}"),
-        "blocks": blocks,
-        "doubling": sides.get(fs.get(f"SceneDoubleSwitch{switch}"), "nochange"),
-        "path": sides.get(fs.get(f"ScenePathSwitch{switch}"), "nochange"),
-        "presets": presets,
-        "color": fs.get(f"MacroColour{switch}"),
-        "midi_out": fs.get(f"SceneMIDIOut{switch}"),
+        **_read_scene_state(fs, switch),
         "states": fs.get(f"SceneNumberOfStates{switch}"),
     }
+    if scene["states"] == 2:
+        scene["current_state"] = 2 if fs.get(f"SceneState{switch}") == 1 else 1
+        scene["second_state"] = _read_scene_state(fs, switch, "State2")
+    return scene
 
 
 def _check_spec(spec: dict[str, Any]) -> None:
