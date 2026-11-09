@@ -375,25 +375,24 @@ def test_spec_format_is_available_as_a_tool_and_a_resource():
     assert "doubling" in str(contents)
 
 
-def test_get_footswitches_reports_settings_without_warnings_when_bank_b_is_reachable(pedal):
+def test_get_footswitches_reports_settings_without_warnings_when_both_banks_are_reachable(pedal):
     result = call("get_footswitches")
     assert result["warnings"] == []
     assert result["auto_assign_footswitches"] is True
     assert pedal.puts == []
 
 
-def test_get_footswitches_warns_when_bank_b_has_no_way_in(pedal):
+def test_get_footswitches_warns_when_switches_1_to_3_have_no_way_in(pedal):
     pedal.objects[GENERAL]["TunerFSAssignment"] = 0
     warnings = call("get_footswitches")["warnings"]
     assert len(warnings) == 1
-    assert "[4]" in warnings[0] and "Bank A/B" in warnings[0]
+    assert "[1]" in warnings[0] and "Bank A/B" in warnings[0]
 
 
 @pytest.mark.parametrize("module", ["", "Empty Slot"])
-def test_get_footswitches_ignores_an_empty_bank_b(pedal, module):
+def test_get_footswitches_ignores_an_empty_bank_behind_the_hold(pedal, module):
     pedal.objects[GENERAL]["TunerFSAssignment"] = 0
-    pedal.objects[FOOTSWITCH]["ModeNew4"] = 0
-    pedal.objects[FOOTSWITCH]["Module4"] = module
+    pedal.objects[FOOTSWITCH]["Module1"] = module
     assert call("get_footswitches")["warnings"] == []
 
 
@@ -600,9 +599,9 @@ def test_create_rig_clears_a_switch_with_an_empty_operation():
     assert instance.objects[FOOTSWITCH]["Operation1"] == ""
 
 
-def test_an_unassigned_switch_on_the_second_bank_is_not_called_unreachable(pedal):
+def test_an_unassigned_switch_behind_the_hold_is_not_called_unreachable(pedal):
     pedal.objects[GENERAL] |= {"TunerFSAssignment": 0, "LooperFSAssignment": 0}
-    pedal.objects[FOOTSWITCH] |= {"ModeNew4": 0, "Module4": "Unassigned"}
+    pedal.objects[FOOTSWITCH]["Module1"] = "Unassigned"
     assert call("get_footswitches")["warnings"] == []
 
 

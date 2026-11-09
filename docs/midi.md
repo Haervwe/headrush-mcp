@@ -40,7 +40,7 @@ Most actions fire on any value from 0 to 127. The exceptions (p.67):
 | 96 | Setlist footswitch mode |
 | 97 | Rig footswitch mode |
 
-CC 18 and 19 move between banks of rigs, which are probably not the footswitch banks that CC 20 toggles. Whether CC 20 works without a hold set to Bank A/B (see the [README](../README.md#reaching-switches-4-6)) hasn't been tested.
+CC 18 and 19 move between banks of rigs, which are probably not the footswitch banks that CC 20 toggles. Whether CC 20 works without a hold set to Bank A/B (see the [README](../README.md#reaching-both-banks)) hasn't been tested.
 
 ### Expression and tempo
 

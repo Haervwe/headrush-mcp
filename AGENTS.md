@@ -16,7 +16,7 @@ This server can change a real pedal that someone may be playing. It's meant to b
 ## Device behaviour
 
 - Creating a rig and placing blocks finish asynchronously and can undo earlier writes. Verify after a settle period (`rigs.py`).
-- Footswitches 1-3 and 4-6 are separate banks. Switches 4-6 are only reachable when a hold is set to Bank A/B in Global Settings, so a correct assignment can still be out of reach.
+- Footswitches 1-3 and 4-6 are separate banks. The tested pedal starts on 4-6, and 1-3 are only reachable when a hold is set to Bank A/B in Global Settings, so a correct assignment can still be out of reach.
 - Never write a `ModuleType` whose `/Evil/Engine/Patch/<Name>` object is missing, even if `ModuleTypes` lists it. One crashed a Core's audio engine. Check the object exists first (object-meta or the live subtree; `HeadRushClient.require_block_object` uses object-meta).
 - Global settings are read-only by policy. They affect every rig, so tell the user what to change on the pedal instead.
 - The pedal is reported to snap values to each parameter's `grid` (community, Core), so compare read-backs within one step.

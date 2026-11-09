@@ -155,7 +155,7 @@ Keys on `/Evil/Engine/FootSwitch`, for switch `n` from 1 to 6:
 | `LastScene`, `LastSceneState` | The last scene fired, counting from 0, and its state |
 | `AnySwitchDoubling` | Whether any block is switching A/B. The editor disables a scene's doubling control without it |
 
-Switches 1-3 and 4-6 are separate banks. Switches 4-6 are only reachable when a hold is set to Bank A/B (see [Global settings](#global-settings)). No object on firmware `5.2.0.2a405ee` has a field named for the current bank, and the editor's code never mentions banks, so software probably can't tell which bank the pedal is showing, or which set it calls A.
+Switches 1-3 and 4-6 are separate banks, and changing between them needs a hold set to Bank A/B (see [Global settings](#global-settings)). On the tested Flex Prime the pedal starts on 4-6, so 1-3 are the ones behind the hold. The User Guide doesn't say which bank comes first. No object on firmware `5.2.0.2a405ee` has a field named for the current bank, and the editor's code never mentions banks, so software probably can't tell which bank the pedal is showing, or which set it calls A.
 
 The pedal keeps the old `Module<n>` and `Operation<n>` when a switch becomes a scene, so ignore them on scene switches.
 

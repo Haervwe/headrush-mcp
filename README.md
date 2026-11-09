@@ -111,24 +111,24 @@ Write tools change the pedal immediately, so a rig can change while you're playi
 
 ## Good to know
 
-- **Footswitch banks:** switches 1-3 and 4-6 are the two banks, and software can't tell which one the pedal is showing. Switches 4-6 are off by default, so see [Reaching switches 4-6](#reaching-switches-4-6). Put what you use most on the same bank.
+- **Footswitch banks:** switches 1-3 and 4-6 are the two banks, and software can't tell which one the pedal is showing. The tested pedal starts on 4-6, and 1-3 need a hold set to Bank A/B, so see [Reaching both banks](#reaching-both-banks). Put what you use most on the same bank.
 - **Auto-assign:** with **Auto Assign Footswitches** on in Global Settings, the pedal gives each newly placed block the next free switch. `set_slot_block` and `create_rig` warn when that may take a switch, and `get_footswitches` reports the setting.
 - **Numbers are normalized by default:** parameters are 0-1 on the wire. Pass `display=true` to `get_block`, `set_block_params` or `set_mix` to use the units the pedal shows, like -3 for -3.0 dB, or `display_params` in a rig spec. See the [API reference](docs/api.md) for the conversions.
 - **Second instances:** names ending in ` 2`, like `Amp 2`, let the same block type appear twice. They're how you run two amps.
 - **Hearing the result:** the server can verify settings, but not sound, so you'll be the judge.
 - **MIDI:** the pedal can also be controlled with MIDI CC messages from a MIDI controller. This server doesn't send MIDI, but [docs/midi.md](docs/midi.md) lists what's available.
 
-### Reaching switches 4-6
+### Reaching both banks
 
-The Flex Prime has three switches and two banks of three assignments per rig. To use switches 4-6, on the pedal:
+The Flex Prime has three switches and two banks of three assignments per rig. Only one bank is available until a hold is set to Bank A/B. On the tested Flex Prime that's switches 4-6, so 1-3 are the ones behind the hold. To use both, on the pedal:
 
 1. Go to **Global Settings > General**.
 2. Set **Assign Tuner Footswitch** (the hold function of switch 3) or **Assign Looper Footswitch** (the hold of switch 2) to **Bank A/B**.
-3. Check that **Footswitch Function** is **On Release**. On Press disables hold functions, so switches 4-6 can't be reached.
+3. Check that **Footswitch Function** is **On Release**. On Press disables hold functions, so you can't change banks.
 
 Now hold that switch to flip between banks, live or while editing in Hardware Assign. The trade-off is losing hold-for-tuner or hold-for-looper on that switch. The tuner is still in the menu, and **Global Settings > Expression Pedal** can open it when a volume pedal reaches 0%. MIDI CC 20 also flips the bank. These settings affect every rig, and this server only reads them.
 
-`get_footswitches` warns when switches 4-6 are assigned but can't be reached, or when On Press has disabled holds. They're left out when the settings can't be read or their options aren't named.
+`get_footswitches` warns when switches 1-3 are assigned but can't be reached, or when On Press has disabled holds. They're left out when the settings can't be read or their options aren't named.
 
 ## Example rigs
 
@@ -152,7 +152,7 @@ To try one, ask your assistant to `create_rig` with the file's full path.
 | "Writes are disabled" | Set `HEADRUSH_ALLOW_WRITES` to `1` and restart your client |
 | "Has unsaved edits" | Save or discard them on the pedal first |
 | `create_rig` reports mismatches | Nothing was saved. Retry with `resume_draft`, or discard the draft on the pedal |
-| Can't reach switches 4-6 | They need a hold set to Bank A/B. See [Reaching switches 4-6](#reaching-switches-4-6) |
+| Can't reach one bank of switches | Changing banks needs a hold set to Bank A/B. See [Reaching both banks](#reaching-both-banks) |
 | A block took a footswitch you didn't assign | Auto Assign Footswitches is on. Reassign it, or turn the setting off on the pedal |
 | A value reads back slightly different | The pedal is reported to snap to the parameter's step size (community, Core). A difference within one step is normal |
 

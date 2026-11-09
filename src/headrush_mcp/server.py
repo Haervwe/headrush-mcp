@@ -175,22 +175,22 @@ def _on_press(values: dict[str, Any], properties: dict[str, Any]) -> bool:
 def _bank_warnings(
     switches: list[dict[str, Any]], values: dict[str, Any], properties: dict[str, Any]
 ) -> list[str]:
-    """Explain why switches 4-6 or the hold functions might be out of reach."""
+    """Explain why switches 1-3 or the hold functions might be out of reach."""
     warnings = []
     holds = [_option(values, properties, k) for k in ("TunerFSAssignment", "LooperFSAssignment")]
     # Only judge the holds if the schema named them; a raw number can't be read as Bank A/B.
     readable = any(isinstance(hold, str) for hold in holds)
     has_bank = any("Bank" in hold for hold in holds if isinstance(hold, str))
-    used_b = [
+    behind_hold = [
         entry["switch"]
-        for entry in switches[3:]
+        for entry in switches[:3]
         if entry["type"] == "scene"
         or entry["type"] in ("toggle", "hold")
         and entry.get("module") not in (None, "", EMPTY_SLOT, UNASSIGNED)
     ]
-    if used_b and readable and not has_bank:
+    if behind_hold and readable and not has_bank:
         warnings.append(
-            f"Switches {used_b} are on the second bank (switches 4-6), which can't be reached "
+            f"Switches {behind_hold} are on the bank the pedal doesn't start on, which can't be reached "
             "until a hold function is set to Bank A/B in Global Settings > General (Assign Tuner "
             "Footswitch is the FS3 hold, Assign Looper Footswitch the FS2 hold)."
         )
@@ -206,9 +206,9 @@ def _bank_warnings(
 def get_footswitches() -> dict[str, Any]:
     """Summarise footswitches, with warnings about switches you can't reach.
 
-    Switches 1-3 and 4-6 are separate banks. Switches 4-6 are only reachable by holding a
-    switch whose hold function is Bank A/B, and holds don't work with Footswitch Function set
-    to On Press; `warnings` says when either gets in the way.
+    Switches 1-3 and 4-6 are separate banks. The pedal starts on 4-6, and 1-3 are only reachable
+    by holding a switch whose hold function is Bank A/B. Holds don't work with Footswitch
+    Function set to On Press. `warnings` says when either gets in the way.
     `auto_assign_footswitches` is whether the pedal puts newly placed blocks on free switches,
     or null if settings couldn't be read.
 
