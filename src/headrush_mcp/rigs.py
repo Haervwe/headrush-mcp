@@ -16,13 +16,16 @@ from .client import (
     RIGS,
     HeadRushClient,
     HeadRushError,
+    PolicyError,
     block_path,
 )
 
 _TOLERANCE = 0.002
 _EXPONENTIAL = 6
+_REVERB_TIME = 10
+_INFINITE_AT = 0.9900000095367432  # The editor's Math.fround(.99): above this shows as Inf.
 # The official editor's curves by normalizeAlgo, as (0-1 to displayed, displayed to 0-1).
-# 0 is linear, and 10 (reverb time) is left to the fixed tolerance.
+# 0 is linear. Reverb time (10) only holds up to _INFINITE_AT, so check for Inf first.
 _CURVES: dict[int, tuple[Callable[[float, float, float], float], ...]] = {
     0: (lambda v, lo, hi: lo + (hi - lo) * v, lambda d, lo, hi: (d - lo) / (hi - lo)),
     5: (lambda v, lo, hi: lo + (hi - lo) * v * v, lambda d, lo, hi: sqrt((d - lo) / (hi - lo))),
@@ -30,9 +33,13 @@ _CURVES: dict[int, tuple[Callable[[float, float, float], float], ...]] = {
         lambda v, lo, hi: lo * (hi / lo) ** v,
         lambda d, lo, hi: log(d / lo) / log(hi / lo),
     ),
+    _REVERB_TIME: (lambda v, lo, hi: (0.45 + v) / (1 - v), lambda d, lo, hi: (d - 0.45) / (1 + d)),
 }
+_RANGE_SLACK = 1e-5  # Schema limits are 32-bit floats, so 3.2 can be just under a 3.2 minimum.
 _ATTEMPTS = 6
 _SETTLE_SECONDS = 1.5
+MIDI_OUT = "MIDI Out"
+UNASSIGNED = "Unassigned"
 _MODE_TOGGLE = 0
 _MODE_SCENE = 2
 _NO_CHANGE = 0
@@ -41,8 +48,8 @@ _MAX_COLOUR = 13
 _SCENE_STATES = {"on": 1, "off": 2, "nochange": _NO_CHANGE}
 _SCENE_SIDES = {"A": 1, "B": 2, "nochange": _NO_CHANGE}
 _SPEC_HELP = "See get_rig_spec_format for the format."
-_SPEC_KEYS = {"name", "routing", "mix", "blocks", "footswitches"}
-_BLOCK_KEYS = {"slot", "block", "params"}
+_SPEC_KEYS = {"name", "routing", "mix", "display_mix", "blocks", "footswitches"}
+_BLOCK_KEYS = {"slot", "block", "params", "display_params"}
 _STOMP_KEYS = {"module", "operation", "name", "mode"}
 _SCENE_KEYS = {"name", "blocks", "doubling", "path", "presets", "color"}
 
@@ -96,7 +103,17 @@ def apply_rig(
         client.require_block_object(block)
 
     # Everything that can be refused is checked before the pedal changes.
+    client.validate_values(CHAIN, chain_values)
+    params = {
+        entry["slot"]: _merged_params(
+            client, block_path(entry["block"]), entry.get("params"), entry.get("display_params")
+        )
+        for entry in spec["blocks"]
+    }
+    mix = _merged_params(client, block_path("Mix"), spec.get("mix"), spec.get("display_mix"))
     switch_values = footswitch_values(spec)
+    for values in switch_values:
+        client.validate_values(FOOTSWITCH, values)
     scenes = [s["scene"] for s in spec.get("footswitches", {}).values() if "scene" in s]
     for scene in scenes:
         check_scene_presets(client, scene)
@@ -106,10 +123,10 @@ def apply_rig(
 
     expected: list[tuple[str, dict[str, Any]]] = [(CHAIN, chain_values)]
     for entry in spec["blocks"]:
-        if entry.get("params"):
-            expected.append((block_path(entry["block"]), entry["params"]))
-    if spec.get("mix"):
-        expected.append((block_path("Mix"), spec["mix"]))
+        if params[entry["slot"]]:
+            expected.append((block_path(entry["block"]), params[entry["slot"]]))
+    if mix:
+        expected.append((block_path("Mix"), mix))
     expected += [(FOOTSWITCH, values) for values in switch_values]
 
     mismatches = _write_until_stable(client, expected, sleep)
@@ -206,6 +223,111 @@ def auto_assign_warnings(client: HeadRushClient) -> list[str]:
     ]
 
 
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _usable_curve(schema: dict[str, Any]) -> tuple[Any, float, float] | None:
+    """Return a number's curve and displayed range, or None if it can't be converted."""
+    curve = _CURVES.get((schema.get("x-options") or {}).get("normalizeAlgo") or 0)
+    low, high = schema.get("minimum"), schema.get("maximum")
+    if curve is None or not _is_number(low) or not _is_number(high) or low == high:
+        return None
+    if curve is _CURVES[_EXPONENTIAL] and (low <= 0 or high <= 0):
+        return None
+    return curve, low, high
+
+
+def to_display(schema: dict[str, Any], value: Any) -> Any:
+    """Show a stored value as the pedal does: a number with its unit, or an option's name.
+
+    A number with a curve this server doesn't know stays as its 0-1 value.
+    """
+    options = schema.get("x-options") or {}
+    names = options.get("strings") or []
+    if schema.get("type") == "boolean":
+        return names[int(value)] if isinstance(value, bool) and len(names) == 2 else value
+    if schema.get("type") == "integer":
+        return names[value] if isinstance(value, int) and 0 <= value < len(names) else value
+    if schema.get("type") != "number" or not _is_number(value):
+        return value
+    if options.get("normalizeAlgo") == _REVERB_TIME and value > _INFINITE_AT:
+        return "Inf"
+    usable = _usable_curve(schema)
+    if usable is None:
+        return value
+    curve, low, high = usable
+    shown = curve[0](value, low, high)
+    try:
+        return options["format"] % shown
+    except (KeyError, TypeError, ValueError):  # Some firmware formats, like "%.0f %", are invalid.
+        return f"{round(shown, 2):g}"
+
+
+def to_wire(path: str, key: str, value: Any, schema: dict[str, Any] | None) -> Any:
+    """Turn a displayed value into what the pedal stores. Refuses what it can't convert."""
+    if schema is None:
+        return value  # set_properties reports the unknown name.
+    where = f"{path}.{key}"
+    options = schema.get("x-options") or {}
+    names = options.get("strings") or []
+    if schema.get("type") == "boolean" and isinstance(value, str):
+        if len(names) != 2 or names.count(value) != 1:
+            raise PolicyError(f"'{value}' isn't an option of {where}. Use its name from describe_block.")
+        return bool(names.index(value))
+    if schema.get("type") == "integer" and names:
+        # Option names can be digits, so "2" can be index 1: a number here means a name too.
+        if names.count(str(value)) != 1:
+            raise PolicyError(f"'{value}' isn't an option of {where}. Use its name from describe_block.")
+        return names.index(str(value))
+    if schema.get("type") != "number":
+        return value
+    if options.get("normalizeAlgo") == _REVERB_TIME and str(value).lower() == "inf":
+        return 1.0
+    usable = _usable_curve(schema)
+    if usable is None:
+        raise PolicyError(f"Can't convert {where} from displayed units. Use its 0-1 value.")
+    if not _is_number(value):
+        raise PolicyError(f"Invalid value {value!r} for {where}: expected a number")
+    curve, low, high = usable
+    bottom, top = min(low, high), max(low, high)
+    slack = (top - bottom) * _RANGE_SLACK
+    if not bottom - slack <= value <= top + slack:
+        raise PolicyError(f"{where} must be between {bottom:g} and {top:g}: {value!r}")
+    inside = min(max(value, bottom), top)
+    return float(min(max(curve[1](inside, low, high), 0.0), 1.0))
+
+
+def display_values(client: HeadRushClient, path: str) -> dict[str, Any]:
+    """Read an object's values as the pedal displays them."""
+    values = client.get_properties(path)
+    properties = client.get_meta(path).get("properties") or {}
+    return {key: to_display(properties.get(key) or {}, value) for key, value in values.items()}
+
+
+def wire_values(client: HeadRushClient, path: str, values: dict[str, Any]) -> dict[str, Any]:
+    """Convert displayed values to stored ones, using the object's schema."""
+    properties = client.get_meta(path).get("properties") or {}
+    return {key: to_wire(path, key, value, properties.get(key)) for key, value in values.items()}
+
+
+def _merged_params(
+    client: HeadRushClient,
+    path: str,
+    params: dict[str, Any] | None,
+    shown: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Combine a spec's 0-1 values with values given in displayed units."""
+    params, shown = params or {}, shown or {}
+    repeated = sorted(set(params) & set(shown))
+    if repeated:
+        raise HeadRushError(f"Set {repeated} on {path} once, in params or in displayed units")
+    merged = params | wire_values(client, path, shown) if shown else params
+    if merged:
+        client.validate_values(path, merged)
+    return merged
+
+
 def _read_scene_state(fs: dict[str, Any], switch: int, prefix: str = "") -> dict[str, Any]:
     """Read one state of a scene. The second state's keys start with State2."""
     states = {value: name for name, value in _SCENE_STATES.items()}
@@ -280,37 +402,42 @@ def _check_spec(spec: dict[str, Any]) -> None:
             check_scene(number, switch["scene"])
         elif "module" in switch:
             _check_keys(switch, _STOMP_KEYS, f"footswitch {number}")
+            if switch["module"] == MIDI_OUT:
+                raise HeadRushError("MIDI Out can't be assigned here. Do that on the pedal.")
         else:
             raise HeadRushError(f"Footswitch {number} needs 'module' or 'scene'")
 
 
-def _scene_values(number: Any, scene: dict[str, Any], slots: dict[str, int]) -> dict[str, Any]:
+def _scene_values(
+    number: Any, scene: dict[str, Any], slots: dict[str, int], state: int = 1
+) -> dict[str, Any]:
+    prefix = "State2" if state == 2 else ""
+
     def slot_of(block: str) -> int:
         if block not in slots:
             raise HeadRushError(f"Scene {scene['name']} uses a block not in the chain: {block}")
         return slots[block]
 
-    values: dict[str, Any] = {
-        f"ModeNew{number}": _MODE_SCENE,
-        f"UserFootSwitchText{number}": scene["name"],
-    }
+    # Both states share one switch mode and one label.
+    values: dict[str, Any] = {f"ModeNew{number}": _MODE_SCENE} if state == 1 else {}
+    values[f"UserFootSwitchText{number}"] = scene["name"]
     if scene.get("blocks") is not None:
         for slot in slots.values():
-            values[f"Scene{number}_{slot}_Mode"] = _NO_CHANGE
-        for block, state in scene["blocks"].items():
-            values[f"Scene{number}_{slot_of(block)}_Mode"] = _SCENE_STATES[state]
+            values[f"{prefix}Scene{number}_{slot}_Mode"] = _NO_CHANGE
+        for block, wanted in scene["blocks"].items():
+            values[f"{prefix}Scene{number}_{slot_of(block)}_Mode"] = _SCENE_STATES[wanted]
     for block, preset in (scene.get("presets") or {}).items():
-        values[f"Scene{number}Slot{slot_of(block)}Preset"] = preset
+        values[f"{prefix}Scene{number}Slot{slot_of(block)}Preset"] = preset
     if "doubling" in scene:
-        values[f"SceneDoubleSwitch{number}"] = _SCENE_SIDES[scene["doubling"]]
+        values[f"{prefix}SceneDoubleSwitch{number}"] = _SCENE_SIDES[scene["doubling"]]
     if "path" in scene:
-        values[f"ScenePathSwitch{number}"] = _SCENE_SIDES[scene["path"]]
+        values[f"{prefix}ScenePathSwitch{number}"] = _SCENE_SIDES[scene["path"]]
     if "color" in scene:
-        values[f"MacroColour{number}"] = scene["color"]
+        values[f"{prefix}MacroColour{number}"] = scene["color"]
     return values
 
 
-def footswitch_values(spec: dict[str, Any]) -> list[dict[str, Any]]:
+def footswitch_values(spec: dict[str, Any], state: int = 1) -> list[dict[str, Any]]:
     """Turn a spec's footswitches into property writes, one dict per switch.
 
     A switch is either a stomp (`module`) or a scene (`scene`). A scene's `blocks`
@@ -321,12 +448,14 @@ def footswitch_values(spec: dict[str, Any]) -> list[dict[str, Any]]:
     result = []
     for number, switch in sorted(spec.get("footswitches", {}).items()):
         if "scene" in switch:
-            values = _scene_values(number, switch["scene"], slots)
+            values = _scene_values(number, switch["scene"], slots, state)
         else:
             values = {
                 f"ModeNew{number}": switch.get("mode", _MODE_TOGGLE),
                 f"Module{number}": switch["module"],
-                f"Operation{number}": switch.get("operation", "On"),
+                f"Operation{number}": (
+                    "" if switch["module"] == UNASSIGNED else switch.get("operation", "On")
+                ),
                 f"UserFootSwitchText{number}": switch.get("name", ""),
             }
         result.append(values)
@@ -359,20 +488,18 @@ def _wire_step(schema: dict[str, Any], wanted: float) -> float | None:
     The schema's grid is in displayed units, such as 0.1 dB, so it depends on the range and curve.
     """
     options = schema.get("x-options") or {}
-    algo = options.get("normalizeAlgo") or 0
-    grid, low, high = options.get("grid"), schema.get("minimum"), schema.get("maximum")
-    numbers = (grid, low, high)
-    if algo not in _CURVES or not all(
-        isinstance(n, (int, float)) and not isinstance(n, bool) for n in numbers
-    ):
+    grid = options.get("grid")
+    usable = _usable_curve(schema)
+    if usable is None or not _is_number(grid) or grid <= 0:
         return None
-    if grid <= 0 or high <= low or (algo == _EXPONENTIAL and low <= 0):
+    if options.get("normalizeAlgo") == _REVERB_TIME and wanted > _INFINITE_AT:
         return None
-    to_display, to_wire = _CURVES[algo]
-    display = to_display(wanted, low, high)
+    (from_wire, from_display), low, high = usable
+    bottom, top = min(low, high), max(low, high)  # Some ranges run backwards, like 3 to -3.
+    display = from_wire(wanted, low, high)
     return max(
-        abs(to_wire(min(display + grid, high), low, high) - wanted),
-        abs(to_wire(max(display - grid, low), low, high) - wanted),
+        abs(from_display(min(display + grid, top), low, high) - wanted),
+        abs(from_display(max(display - grid, bottom), low, high) - wanted),
     )
 
 

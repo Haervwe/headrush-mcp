@@ -22,11 +22,12 @@
 |---|---|---|
 | `name` | Yes | A rig name not already on the pedal |
 | `routing` | No | Routing number, default `0` |
-| `mix` | No | Parallel path settings |
-| `blocks` | Yes | Blocks by `slot` (1-14), with optional `params` |
+| `mix` | No | Parallel path settings, normalized 0-1 |
+| `display_mix` | No | The same settings in dB, percent and microseconds |
+| `blocks` | Yes | Blocks by `slot` (1-14), with optional `params` (normalized 0-1) and `display_params` (the units the pedal shows) |
 | `footswitches` | No | By switch number (1-6) |
 
-Parameter names and option indexes vary by block, so use `describe_block` to find them. For example, `Type` on `Amp` is an index into its list of models. Numbers are normalized 0-1, and the [API reference](../../docs/api.md) explains converting them.
+Parameter names and option indexes vary by block, so use `describe_block` to find them. For example, `Type` on `Amp` is an index into its list of models. Numbers in `params` are normalized 0-1. In `display_params`, give them in the units the pedal shows, like `-3` for -3.0 dB, and options by name; a number is read as an option's name, for options named with digits. A value outside the range in `describe_block` is refused. Set a parameter in one or the other, not both. The [API reference](../../docs/api.md) has the conversions.
 
 ## Routings
 
@@ -93,7 +94,7 @@ Check the sound in mono if you pan hard, as it depends on how your output is con
 
 Scene names display in capitals on the official editor, so use capitals for consistency.
 
-`set_scene` takes the same fields, and `get_scene` returns them. With `set_scene`, `blocks` is optional, and anything you leave out keeps its current value, so you can change just `doubling`. A scene's second switch state and MIDI out can't be set here, so do those on the pedal. `get_scene` shows a second state under `second_state`, with the same fields.
+`set_scene` takes the same fields, and `get_scene` returns them. With `set_scene`, `blocks` is optional, and anything you leave out keeps its current value, so you can change just `doubling`. To add a second state, call `set_scene` with `state` 2 after building the rig, then `save_loaded_rig`; specs can't include one. MIDI out can't be set here, so do that on the pedal. `get_scene` shows a second state under `second_state`, with the same fields.
 
 Switches 1-3 and 4-6 are separate banks, and each switch has its own scene. Two switches with the same label can still behave differently, so check both. Switches 4-6 can only be reached if the user has set a hold to Bank A/B in Global Settings, and `get_footswitches` warns if not. When switches 4-6 can't be reached, put what matters on 1-3.
 

@@ -31,20 +31,25 @@ READ_METHODS = {
     (BLOCKS, "blockPresets"),
     (BLOCKS, "categoryBlocks"),
     (BLOCKS, "categoryOfBlock"),
+    # The official editor calls these two to fill its footswitch assignment menu.
+    (FOOTSWITCH, "operationList"),
+    (FOOTSWITCH, "operationEnableList"),
 }
 WRITE_METHODS = {
     (RIGS, "makeNewRigConfirm"),
     (RIGS, "saveRigAs"),
     (RIGS, "saveRig"),
     (RIGS, "loadRigConfirm"),
+    (FOOTSWITCH, "createNewSceneState"),
 }
 
 _CHAIN_KEY = re.compile(r"^(ModuleType([1-9]|1[0-4])|Routing)$")
 _FOOTSWITCH_KEY = re.compile(
     r"^(Module|Operation|ModeNew|UserFootSwitchText|SceneActive"
-    r"|SceneDoubleSwitch|ScenePathSwitch|MacroColour)[1-6]$"
-    r"|^Scene[1-6]_([1-9]|1[0-4])_Mode$"
-    r"|^Scene[1-6]Slot([1-9]|1[0-4])Preset$"
+    r"|SceneNumberOfStates|SceneState)[1-6]$"
+    r"|^(State2)?(SceneDoubleSwitch|ScenePathSwitch|MacroColour)[1-6]$"
+    r"|^(State2)?Scene[1-6]_([1-9]|1[0-4])_Mode$"
+    r"|^(State2)?Scene[1-6]Slot([1-9]|1[0-4])Preset$"
 )
 # Block names can contain apostrophes and parentheses, as in Sher'ff and IR (1024).
 _READ_PATH = re.compile(r"^/Evil/(API|Cloud|Engine|Gui)(/[\w\-'()]+)*$")
@@ -162,11 +167,15 @@ class HeadRushClient:
     def set_properties(self, path: str, values: dict[str, Any]) -> None:
         """Validate values against the device's schema, then write them."""
         self._require_writes()
+        self.validate_values(path, values)
+        self._send("PUT", f"/object-properties{path}", json=values)
+
+    def validate_values(self, path: str, values: dict[str, Any]) -> None:
+        """Refuse values a write would refuse, without writing anything."""
         self._check_writable_path(path, values)
         properties = self.get_meta(path).get("properties") or {}
         for key, value in values.items():
             _validate(path, key, value, properties.get(key))
-        self._send("PUT", f"/object-properties{path}", json=values)
 
     @staticmethod
     def _check_writable_path(path: str, values: dict[str, Any]) -> None:

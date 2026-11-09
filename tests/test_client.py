@@ -460,7 +460,7 @@ def test_wire_step_follows_the_exponential_curve():
         {"minimum": 0, "maximum": 1, "x-options": {"grid": 0}},
         {"minimum": 1, "maximum": 1, "x-options": {"grid": 0.1}},
         {"minimum": 0, "maximum": 10, "x-options": {"grid": 0.1, "normalizeAlgo": 6}},
-        {"minimum": 0, "maximum": 10, "x-options": {"grid": 0.1, "normalizeAlgo": 10}},
+        {"minimum": 0, "maximum": 10, "x-options": {"grid": 0.1, "normalizeAlgo": 3}},
     ],
 )
 def test_wire_step_is_unknown_when_it_cant_be_worked_out(schema):

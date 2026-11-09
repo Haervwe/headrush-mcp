@@ -25,15 +25,19 @@ from .client import (
     block_path,
 )
 from .rigs import (
+    MIDI_OUT,
     ROUTINGS,
+    UNASSIGNED,
     apply_rig,
     auto_assign_warnings,
     check_scene,
     check_scene_presets,
+    display_values,
     find_mismatches,
     footswitch_values,
     read_scene,
     scene_warnings,
+    wire_values,
 )
 
 mcp = MCPServer("headrush")
@@ -47,6 +51,7 @@ _LABEL_UPDATE_SECONDS = 1.0  # The pedal updates footswitch labels shortly after
 _RIG_SPEC_FORMAT = Path(__file__).with_name("rig-specs.md")
 _SWITCH_TYPES = {0: "toggle", 1: "hold", 2: "scene"}
 _SCENE_SIDES = {0: "nochange", 1: "A", 2: "B"}
+_MODE_SCENE = 2
 
 
 @mcp.tool()
@@ -100,9 +105,14 @@ def list_routings() -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-def get_block(block: str) -> dict[str, Any]:
-    """Read a block's current values. Numbers are normalized 0-1."""
-    return client.get_properties(block_path(block))
+def get_block(block: str, display: bool = False) -> dict[str, Any]:
+    """Read a block's current values. Numbers are normalized 0-1.
+
+    With `display`, values read as on the pedal, like "-3.0 dB", and options by name. A number
+    with an unknown curve stays 0-1.
+    """
+    path = block_path(block)
+    return display_values(client, path) if display else client.get_properties(path)
 
 
 @mcp.tool()
@@ -128,7 +138,7 @@ def find_models(
     `category` filters blocks, like "overdrive".
 
     `installed` is true, false, or null if the pedal couldn't be checked. For a model, write
-    `index` to `param` on `block`. For a file, write `file` to `param` on one of `blocks`.
+    `index` to `param` on `block`, or its name when using displayed units. For a file, write `file` to `param` on one of `blocks`.
     Trust `inspired_by` only as far as `notes` says, and never guess it for an unknown model.
     """
     return _find_models(client, query, kind, category, limit)
@@ -175,7 +185,8 @@ def _bank_warnings(
         entry["switch"]
         for entry in switches[3:]
         if entry["type"] == "scene"
-        or entry["type"] in ("toggle", "hold") and entry.get("module") not in (None, "", EMPTY_SLOT)
+        or entry["type"] in ("toggle", "hold")
+        and entry.get("module") not in (None, "", EMPTY_SLOT, UNASSIGNED)
     ]
     if used_b and readable and not has_bank:
         warnings.append(
@@ -239,8 +250,7 @@ def get_scene(switch: int) -> dict[str, Any]:
 
     Uses the same shape as set_scene. When `states` is 2, each press alternates between two
     states: the top-level fields are the first, `second_state` holds the second, and
-    `current_state` is 1 or 2. The second state is read-only here. The pedal doesn't report
-    which A/B side is active.
+    `current_state` is 1 or 2. The pedal doesn't report which A/B side is active.
     """
     return read_scene(client, switch)
 
@@ -261,10 +271,19 @@ def get_footswitch_settings() -> dict[str, Any]:
 
 
 @mcp.tool()
-def set_block_params(block: str, values: dict[str, Any]) -> dict[str, Any]:
-    """Change parameters on the loaded rig without saving. Numbers are normalized 0-1."""
-    client.set_properties(block_path(block), values)
-    current = client.get_properties(block_path(block))
+def set_block_params(block: str, values: dict[str, Any], display: bool = False) -> dict[str, Any]:
+    """Change parameters on the loaded rig without saving. Numbers are normalized 0-1.
+
+    With `display`, give numbers in the units the pedal shows, like -3 for -3.0 dB or 800 for
+    800 Hz, and options by name. Infinite reverb time is "Inf". describe_block has the ranges,
+    and a value outside them is refused. Returns the values read back, in the same units.
+    """
+    return _write_values(block_path(block), values, display)
+
+
+def _write_values(path: str, values: dict[str, Any], display: bool) -> dict[str, Any]:
+    client.set_properties(path, wire_values(client, path, values) if display else values)
+    current = display_values(client, path) if display else client.get_properties(path)
     return {key: current.get(key) for key in values}
 
 
@@ -294,15 +313,50 @@ def set_routing(routing: int) -> dict[str, Any]:
 
 
 @mcp.tool()
-def set_mix(values: dict[str, float]) -> dict[str, Any]:
+def set_mix(values: dict[str, float], display: bool = False) -> dict[str, Any]:
     """Set parallel path mixing without saving.
 
     Keys: Para1Level, Para2Level, Para1Pan, Para2Pan, ParaDelay, ParaXFade. Values are
     normalized 0-1: for pans 0 is left, 0.5 centre and 1 right; for level 0.75 is -6 dB.
+    With `display`, give dB, percent (-100 is left) and microseconds instead.
     """
-    client.set_properties(_MIX, values)
-    current = client.get_properties(_MIX)
-    return {key: current.get(key) for key in values}
+    return _write_values(_MIX, values, display)
+
+
+def _check_switch(switch: int) -> None:
+    if switch not in range(1, 7):
+        raise HeadRushError(f"Footswitch must be 1-6: {switch!r}")
+
+
+def _operations(switch: int, module: str) -> list[dict[str, Any]]:
+    """Read what a module can do on a switch, as the official editor's assignment menu does."""
+    if module == MIDI_OUT:
+        return []  # Its one entry, New/Edit..., opens a dialog in the editor and isn't an operation.
+    args = [switch - 1, module]
+    names = client.call(FOOTSWITCH, "operationList", args)
+    if not isinstance(names, list):
+        return []
+    enabled = client.call(FOOTSWITCH, "operationEnableList", args)
+    flags = enabled if isinstance(enabled, list) else []
+    return [
+        {"operation": name, "enabled": not (index < len(flags) and flags[index] is False)}
+        for index, name in enumerate(names)
+    ]
+
+
+@mcp.tool()
+def list_footswitch_actions(switch: int, module: str = "") -> dict[str, Any]:
+    """List what footswitch 1-6 can control, for choosing set_footswitch's arguments.
+
+    Without `module`, returns the modules the switch can be assigned. With one, returns its
+    operations; those with `enabled` false can't be chosen right now. MIDI Out is listed by
+    the pedal but can't be assigned here.
+    """
+    _check_switch(switch)
+    if not module:
+        fs = client.get_properties(FOOTSWITCH)
+        return {"switch": switch, "modules": fs.get(f"ModuleList{switch}") or []}
+    return {"switch": switch, "module": module, "operations": _operations(switch, module)}
 
 
 def _write_switch(switch: int, config: dict[str, Any]) -> dict[str, Any]:
@@ -315,7 +369,24 @@ def _write_switch(switch: int, config: dict[str, Any]) -> dict[str, Any]:
 
 @mcp.tool()
 def set_footswitch(switch: int, module: str, operation: str = "On", name: str = "") -> dict[str, Any]:
-    """Make footswitch 1-6 toggle one block, without saving."""
+    """Make footswitch 1-6 control one module, without saving.
+
+    The switch becomes a Toggle, and `name` replaces its label. list_footswitch_actions has the
+    valid modules and operations; an operation the pedal doesn't offer is refused. "Unassigned"
+    clears the switch and ignores `operation`. MIDI Out can't be assigned here.
+    """
+    _check_switch(switch)
+    if module == MIDI_OUT:
+        raise HeadRushError("MIDI Out can't be assigned here. Do that on the pedal.")
+    if module == UNASSIGNED:
+        operation = ""
+    try:
+        operations = _operations(switch, module)
+    except HeadRushError:
+        operations = []  # Firmware without this list can still take the assignment.
+    if operations and not any(o["operation"] == operation and o["enabled"] for o in operations):
+        choices = [o["operation"] for o in operations if o["enabled"]]
+        raise HeadRushError(f"{module} can't do '{operation}' on switch {switch}. Options: {choices}")
     return _write_switch(switch, {"module": module, "operation": operation, "name": name})
 
 
@@ -328,6 +399,7 @@ def set_scene(
     path: str | None = None,
     presets: dict[str, str] | None = None,
     color: int | None = None,
+    state: int = 1,
 ) -> dict[str, Any]:
     """Make footswitch 1-6 a scene, or edit one, without saving. Reads the result back.
 
@@ -336,15 +408,23 @@ def set_scene(
     "nochange". `presets` maps blocks to a preset to recall, or "No Preset" to clear one.
     `color` is 0-13. Anything you leave out keeps its current value.
 
-    Check `mismatches` and `warnings` in the result. Second switch states aren't supported.
+    `state` 2 edits the second state, which each press alternates with the first. It needs an
+    existing scene, and creates the second state if there isn't one.
+    `name` is shared by both states.
+
+    Check `mismatches` and `warnings` in the result.
     """
+    if state not in (1, 2):
+        raise HeadRushError(f"Scene state must be 1 or 2: {state!r}")
     optional = {"blocks": blocks, "doubling": doubling, "path": path, "presets": presets, "color": color}
     scene = {"name": name} | {key: value for key, value in optional.items() if value is not None}
     check_scene(switch, scene, require_blocks=False)
     check_scene_presets(client, scene)
     values = footswitch_values(
-        {"blocks": client.current_chain(), "footswitches": {str(switch): {"scene": scene}}}
+        {"blocks": client.current_chain(), "footswitches": {str(switch): {"scene": scene}}}, state
     )[0]
+    if state == 2:
+        _ensure_second_state(switch)
     for key, value in values.items():
         client.set_properties(FOOTSWITCH, {key: value})
     time.sleep(_LABEL_UPDATE_SECONDS)
@@ -355,9 +435,40 @@ def set_scene(
     }
 
 
+def _require_scene(switch: int) -> dict[str, Any]:
+    _check_switch(switch)
+    fs = client.get_properties(FOOTSWITCH)
+    if fs.get(f"ModeNew{switch}") != _MODE_SCENE:
+        raise HeadRushError(f"Footswitch {switch} isn't a scene")
+    return fs
+
+
+def _ensure_second_state(switch: int) -> None:
+    """Add a second state the way the official editor does: create it, then enable it."""
+    if _require_scene(switch).get(f"SceneNumberOfStates{switch}") == 2:
+        return
+    client.call(FOOTSWITCH, "createNewSceneState", [switch - 1, 0])
+    client.set_properties(FOOTSWITCH, {f"SceneNumberOfStates{switch}": 2})
+    time.sleep(_LABEL_UPDATE_SECONDS)
+
+
+@mcp.tool()
+def remove_scene_second_state(switch: int) -> dict[str, Any]:
+    """Go back to one state on the scene on footswitch 1-6, without saving."""
+    if _require_scene(switch).get(f"SceneNumberOfStates{switch}") == 2:
+        # The same two writes, in the same order, as the official editor's remove button.
+        client.set_properties(FOOTSWITCH, {f"SceneNumberOfStates{switch}": 1})
+        client.set_properties(FOOTSWITCH, {f"SceneState{switch}": 0})
+    return read_scene(client, switch)
+
+
 @mcp.tool()
 def activate_scene(switch: int) -> dict[str, Any]:
-    """Fire the scene on footswitch 1-6 of the loaded rig, without saving."""
+    """Fire the scene on footswitch 1-6 of the loaded rig, without saving.
+
+    On a two-state scene this applies the current state. It doesn't alternate to the other
+    state, which takes a press on the pedal.
+    """
     if client.get_properties(FOOTSWITCH).get(f"ModeNew{switch}") != 2:
         raise HeadRushError(f"Footswitch {switch} isn't a scene")
     client.set_properties(FOOTSWITCH, {f"SceneActive{switch}": True})

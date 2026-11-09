@@ -57,7 +57,7 @@ This server doesn't use the WebSocket yet, and non-browser clients haven't been 
 
 ## Parameter values
 
-Numbers are normalized 0-1 on the wire, whatever range the schema shows. To convert a linear parameter:
+Numbers are normalized 0-1 on the wire, whatever range the schema shows. `get_block`, `set_block_params` and `set_mix` convert for you with `display=true`, and rig specs with `display_params` and `display_mix`. They support the four curves below and refuse any other. To convert a linear parameter yourself:
 
 ```text
 normalized = (display - minimum) / (maximum - minimum)
@@ -78,7 +78,9 @@ Those are the only ids on firmware `5.2.0.2a405ee`, with `6` on most frequency a
 
 `x-options.grid` is the step size **in displayed units**, like 1 for a 0-100 knob or 0.1 for a dB value, so convert it through the curve before comparing 0-1 values. The pedal is reported to snap written values to the grid and not to clamp out-of-range values (community, tested on a Core: ToneCommand; not tested here). Compare read-backs within one grid step, not as exact floats.
 
-Integers such as `Amp.Type` are indexes into `x-options.strings` in the schema, and aren't normalized.
+Integers such as `Amp.Type` are indexes into `x-options.strings` in the schema, and aren't normalized. In `display` mode they go by name, and a number is read as a name, because some names are digits: on `Jimmy OD.SoftClip`, `2` is the second option, index 1. Booleans can have two names as well, like `Amp.DoubleMode`, where false is `Stereo` and true is `Switch`.
+
+The editor renames two mic options on the `8x10 Blue Line` cab, showing `Dyn 409` as `Dyn 20` and `Cond 87` as `Dyn 12`. `display` mode uses the schema's names, `Dyn 409` and `Cond 87`, for every cab.
 
 ## Key objects
 
@@ -157,11 +159,13 @@ Switches 1-3 and 4-6 are separate banks. Switches 4-6 are only reachable when a 
 
 The pedal keeps the old `Module<n>` and `Operation<n>` when a switch becomes a scene, so ignore them on scene switches.
 
+`ModuleList<n>` lists what switch `n` can be assigned, including non-block modules such as `Tempo`, `Signal Chain` and `Hold Functions`. The `operationList` and `operationEnableList` methods take `[zero-based switch, module name]` and return its operations and whether each can be chosen. The editor calls them to fill its assignment menu, and assigns `Unassigned` with an empty operation. `MIDI Out`'s only operation, `New/Edit...`, opens a dialog in the editor rather than being a real assignment.
+
 ### Scene states
 
 A scene can have two states on one switch, and each press alternates between them (User Guide p.32). Each state has its own On/Off/No Change per block and LED colour (p.32) and MIDI out (p.35); presets, doubling and path are probably set up like any scene. The editor adds state 2 by calling `createNewSceneState` with `[zero-based switch, 0]`, then writing `SceneNumberOfStates<n>` as `2`. Selecting a state to edit writes `SceneState<n>`. The maximum is two. On the older HeadRush FX, No Change in state 2 is relative to state 1 ([support article](https://support.headrushfx.com/en/support/solutions/articles/69000828931-headrush-fx-2-5-creating-and-editing-dual-scenes)), and probably works the same here.
 
-This server reads state 2 through `get_scene`, but doesn't create or edit it. Community notes from a Core ([headrush-remote-buttons](https://github.com/thomasborgogno/headrush-remote-buttons)): firing `SceneActive<n>=true` on an already active two-state scene toggles `SceneState<n>` between 0 and 1, and that client never writes `false`. Untested here.
+`get_scene` reads state 2 and `set_scene` with `state` 2 edits it, creating it first if needed with the editor's sequence: `createNewSceneState` with the zero-based switch and 0, then `SceneNumberOfStates<n>` = 2. Removing it writes `SceneNumberOfStates<n>` = 1, then `SceneState<n>` = 0. Both sequences follow the editor's JavaScript and read back correctly on a Flex Prime on firmware 5.2, through a save. Community notes from a Core ([headrush-remote-buttons](https://github.com/thomasborgogno/headrush-remote-buttons)): firing `SceneActive<n>=true` on an already active two-state scene toggles `SceneState<n>` between 0 and 1, and that client never writes `false`. A Flex Prime on firmware 5.2 didn't do this: four `SceneActive<n>=true` writes on a two-state scene left `SceneState<n>` at 0, and its second state's block changes didn't apply.
 
 ### Scene MIDI out
 

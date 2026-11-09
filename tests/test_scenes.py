@@ -7,7 +7,14 @@ import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
 from headrush_mcp import server
-from headrush_mcp.client import BLOCKS, CHAIN, FOOTSWITCH, RIGS, HeadRushClient, PolicyError
+from headrush_mcp.client import (
+    BLOCKS,
+    CHAIN,
+    FOOTSWITCH,
+    RIGS,
+    HeadRushClient,
+    PolicyError,
+)
 from headrush_mcp.rigs import _check_spec, apply_rig
 
 GENERAL = "/Evil/Engine/Settings/General"
@@ -21,6 +28,9 @@ class Pedal:
         self.methods: list[str] = []
         self.ignore: set[str] = set()
         self.missing: set[str] = set()  # Objects that answer 404, like a block with no object.
+        self.operations: dict[str, tuple[list, list]] = {}  # Module: names and enabled flags.
+        self.puts_before_create: int | None = None
+        self.arguments: dict[str, list] = {}  # Last arguments by method name.
         chain = {f"ModuleType{n}": 0 for n in range(1, 15)} | {"ModuleType1": 1, "ModuleType3": 2}
         fs = {
             "AnySwitchDoubling": doubling,
@@ -61,11 +71,20 @@ class Pedal:
                 f"SceneDoubleSwitch{n}": {"type": "integer", "minimum": 0, "maximum": 2},
                 f"ScenePathSwitch{n}": {"type": "integer", "minimum": 0, "maximum": 2},
                 f"MacroColour{n}": {"type": "integer", "minimum": 0, "maximum": 13},
+                f"State2SceneDoubleSwitch{n}": {"type": "integer", "minimum": 0, "maximum": 2},
+                f"State2ScenePathSwitch{n}": {"type": "integer", "minimum": 0, "maximum": 2},
+                f"State2MacroColour{n}": {"type": "integer", "minimum": 0, "maximum": 13},
+                f"SceneNumberOfStates{n}": {"type": "integer", "minimum": 1, "maximum": 2},
+                f"SceneState{n}": {"type": "integer", "minimum": 0, "maximum": 1},
+                f"Module{n}": {"type": "string"},
+                f"Operation{n}": {"type": "string"},
             }
             for slot in range(1, 15):
                 switch_meta |= {
                     f"Scene{n}_{slot}_Mode": {"type": "integer", "minimum": 0, "maximum": 2},
                     f"Scene{n}Slot{slot}Preset": {"type": "string"},
+                    f"State2Scene{n}_{slot}_Mode": {"type": "integer", "minimum": 0, "maximum": 2},
+                    f"State2Scene{n}Slot{slot}Preset": {"type": "string"},
                 }
         self.meta = {
             FOOTSWITCH: switch_meta,
@@ -82,8 +101,17 @@ class Pedal:
             return httpx.Response(404, json={"desc": "no such object"})
         if path.startswith("/object-method"):
             self.methods.append(path)
+            self.arguments[path.rsplit("/", 1)[-1]] = json.loads(request.content)["arguments"]
             if path.endswith("/blockPresets"):
                 return httpx.Response(200, json={"methodReturnValue": ["Warm", "+Factory"]})
+            if path.endswith("/createNewSceneState"):
+                self.puts_before_create = len(self.puts)
+            if path.endswith(("/operationList", "/operationEnableList")):
+                arguments = json.loads(request.content)["arguments"]
+                module = arguments[1]
+                if module in self.operations:
+                    which = 0 if path.endswith("/operationList") else 1
+                    return httpx.Response(200, json={"methodReturnValue": self.operations[module][which]})
             return httpx.Response(200, json={"methodReturnValue": True})
         if path.startswith("/object-meta"):
             return httpx.Response(200, json={"properties": self.meta.get(path[len("/object-meta") :], {})})
@@ -272,11 +300,8 @@ def test_get_footswitch_settings_names_options_and_never_writes(pedal):
     assert pedal.puts == []
 
 
-@pytest.mark.parametrize(
-    "key",
-    ["State2SceneDoubleSwitch1", "SceneMIDIOut1", "SceneNumberOfStates1", "SceneState1", "State2Scene1_1_Mode"],
-)
-def test_second_states_and_midi_out_stay_unwritable(key):
+@pytest.mark.parametrize("key", ["SceneMIDIOut1", "State2SceneMIDIOut1", "State2Scene1_1_Effect"])
+def test_midi_out_and_scene_contents_stay_unwritable(key):
     client = connect(Pedal())
     with pytest.raises(PolicyError, match="not allowed"):
         client.set_properties(FOOTSWITCH, {key: 1})
@@ -453,3 +478,169 @@ def test_create_rig_warns_when_auto_assign_may_take_a_switch():
     pedal.objects[GENERAL]["AutoAssignments"] = False
     result = apply_rig(connect(pedal), spec_with(name="Other"), sleep=lambda _: None)
     assert result["warnings"] == []
+
+
+def set_second_state(**args):
+    return call("set_scene", switch=4, name="LEAD", state=2, **args)
+
+
+def test_set_scene_adds_a_second_state_the_way_the_editor_does(pedal):
+    result = set_second_state(blocks={"Amp": "off", "Delay": "on"}, doubling="A", path="B", color=9, presets={"Delay": "Warm"})
+
+    assert pedal.methods.count("/object-method/Evil/Engine/FootSwitch/createNewSceneState") == 1
+    assert pedal.puts_before_create == 0
+    assert pedal.arguments["createNewSceneState"] == [3, 0]
+    assert any(put.get("UserFootSwitchText4") == "LEAD" for put in pedal.puts)
+    assert pedal.puts[0] == {"SceneNumberOfStates4": 2}
+    fs = pedal.objects[FOOTSWITCH]
+    assert fs["State2Scene4_1_Mode"] == 2 and fs["State2Scene4_3_Mode"] == 1
+    assert fs["State2SceneDoubleSwitch4"] == 1 and fs["State2ScenePathSwitch4"] == 2
+    assert fs["State2MacroColour4"] == 9 and fs["State2Scene4Slot3Preset"] == "Warm"
+    assert result["mismatches"] == []
+
+
+def test_set_scene_second_state_leaves_the_first_alone(pedal):
+    before = dict(pedal.objects[FOOTSWITCH])
+    set_second_state(blocks={"Amp": "off"}, color=9)
+    fs = pedal.objects[FOOTSWITCH]
+    first = [k for k in before if k.startswith(("Scene4", "MacroColour4", "ModeNew4")) and k != "SceneNumberOfStates4"]
+    assert {k: fs[k] for k in first} == {k: before[k] for k in first}
+    assert not any("ModeNew4" in put for put in pedal.puts)
+
+
+def test_set_scene_does_not_recreate_an_existing_second_state(pedal):
+    pedal.objects[FOOTSWITCH]["SceneNumberOfStates4"] = 2
+    set_second_state(color=2)
+    assert not [m for m in pedal.methods if m.endswith("createNewSceneState")]
+    assert {"SceneNumberOfStates4": 2} not in pedal.puts
+
+
+@pytest.mark.parametrize(
+    ("args", "reason"),
+    [
+        ({"switch": 1, "state": 2}, "isn't a scene"),
+        ({"switch": 4, "state": 3}, "must be 1 or 2"),
+        ({"switch": 4, "state": 2, "blocks": {"Amp": "loud"}}, "on.*off"),
+        ({"switch": 4, "state": 2, "blocks": {"Chorus": "on"}}, "not in the chain"),
+    ],
+)
+def test_set_scene_second_state_refuses_without_writing(pedal, args, reason):
+    with pytest.raises(ToolError, match=reason):
+        call("set_scene", name="X", **args)
+    assert pedal.puts == [] and not [m for m in pedal.methods if m.endswith("createNewSceneState")]
+
+
+def test_creating_a_second_state_needs_writes_enabled(monkeypatch):
+    instance = Pedal()
+    monkeypatch.setattr(server, "client", connect(instance, allow_writes=False))
+    with pytest.raises(ToolError, match="disabled"):
+        set_second_state(color=2)
+    assert instance.methods == []
+
+
+def test_remove_second_state_uses_the_editors_two_writes(pedal):
+    pedal.objects[FOOTSWITCH] |= {"SceneNumberOfStates4": 2, "SceneState4": 1}
+    assert call("remove_scene_second_state", switch=4)["states"] == 1
+    assert pedal.puts == [{"SceneNumberOfStates4": 1}, {"SceneState4": 0}]
+
+
+def test_remove_second_state_is_harmless_without_one(pedal):
+    assert call("remove_scene_second_state", switch=4)["states"] == 1
+    assert pedal.puts == []
+
+
+def test_remove_second_state_refuses_a_switch_that_is_not_a_scene(pedal):
+    with pytest.raises(ToolError, match="isn't a scene"):
+        call("remove_scene_second_state", switch=1)
+
+
+def test_list_footswitch_actions_lists_modules(pedal):
+    pedal.objects[FOOTSWITCH]["ModuleList2"] = ["Unassigned", "Amp"]
+    assert call("list_footswitch_actions", switch=2) == {"switch": 2, "modules": ["Unassigned", "Amp"]}
+    assert pedal.methods == [] and pedal.puts == []
+
+
+def test_list_footswitch_actions_lists_operations_with_zero_based_switch(pedal):
+    pedal.operations["Amp"] = (["On", "Mod"], [True, False])
+    result = call("list_footswitch_actions", switch=2, module="Amp")
+    assert result["operations"] == [
+        {"operation": "On", "enabled": True},
+        {"operation": "Mod", "enabled": False},
+    ]
+    assert pedal.arguments["operationList"] == [1, "Amp"]
+    assert pedal.arguments["operationEnableList"] == [1, "Amp"]
+    assert pedal.puts == []
+
+
+def test_list_footswitch_actions_handles_the_empty_enable_list(pedal):
+    pedal.operations["Unassigned"] = ([""], [])
+    result = call("list_footswitch_actions", switch=2, module="Unassigned")
+    assert result["operations"] == [{"operation": "", "enabled": True}]
+
+
+def test_set_footswitch_can_clear_a_switch_with_the_default_operation(pedal):
+    pedal.operations["Unassigned"] = ([""], [])
+    call("set_footswitch", switch=1, module="Unassigned")
+    assert pedal.objects[FOOTSWITCH]["Module1"] == "Unassigned"
+    assert pedal.objects[FOOTSWITCH]["Operation1"] == ""
+
+
+def test_create_rig_refuses_midi_out_before_touching_the_pedal():
+    instance = Pedal()
+    bad = {"name": "New", "blocks": [{"slot": 1, "block": "Amp"}], "footswitches": {"1": {"module": "MIDI Out"}}}
+    with pytest.raises(ToolError, match="MIDI Out"):
+        apply_rig(connect(instance), bad, sleep=lambda _: None)
+    assert instance.puts == [] and instance.methods == []
+
+
+def test_create_rig_clears_a_switch_with_an_empty_operation():
+    instance = Pedal()
+    spec = {"name": "New", "blocks": [{"slot": 1, "block": "Amp"}], "footswitches": {"1": {"module": "Unassigned"}}}
+    apply_rig(connect(instance), spec, sleep=lambda _: None)
+    assert instance.objects[FOOTSWITCH]["Operation1"] == ""
+
+
+def test_an_unassigned_switch_on_the_second_bank_is_not_called_unreachable(pedal):
+    pedal.objects[GENERAL] |= {"TunerFSAssignment": 0, "LooperFSAssignment": 0}
+    pedal.objects[FOOTSWITCH] |= {"ModeNew4": 0, "Module4": "Unassigned"}
+    assert call("get_footswitches")["warnings"] == []
+
+
+def test_midi_out_is_not_offered_or_assignable(pedal):
+    pedal.operations["MIDI Out"] = (["New/Edit..."], [True])
+    assert call("list_footswitch_actions", switch=1, module="MIDI Out")["operations"] == []
+    with pytest.raises(ToolError, match="MIDI Out"):
+        call("set_footswitch", switch=1, module="MIDI Out", operation="New/Edit...")
+    assert pedal.puts == []
+
+
+def test_list_footswitch_actions_works_with_writes_off(monkeypatch):
+    instance = Pedal()
+    instance.operations["Amp"] = (["On"], [True])
+    monkeypatch.setattr(server, "client", connect(instance, allow_writes=False))
+    assert call("list_footswitch_actions", switch=1, module="Amp")["operations"][0]["enabled"]
+
+
+def test_list_footswitch_actions_refuses_a_bad_switch(pedal):
+    with pytest.raises(ToolError, match="1-6"):
+        call("list_footswitch_actions", switch=7)
+
+
+@pytest.mark.parametrize("operation", ["Nope", "Mod"])
+def test_set_footswitch_refuses_an_operation_the_pedal_does_not_offer(pedal, operation):
+    pedal.operations["Amp"] = (["On", "Mod"], [True, False])
+    with pytest.raises(ToolError, match="Options:.*On"):
+        call("set_footswitch", switch=2, module="Amp", operation=operation)
+    assert pedal.puts == []
+
+
+def test_set_footswitch_accepts_an_offered_operation(pedal):
+    pedal.operations["Amp"] = (["On", "Mod"], [True, True])
+    call("set_footswitch", switch=1, module="Amp", operation="Mod")
+    assert pedal.objects[FOOTSWITCH]["Operation1"] == "Mod"
+
+
+def test_set_footswitch_still_works_without_the_operation_list(pedal):
+    pedal.missing.add("/Evil/Engine/FootSwitch/operationList")
+    call("set_footswitch", switch=1, module="Amp", operation="On")
+    assert pedal.objects[FOOTSWITCH]["Module1"] == "Amp"
