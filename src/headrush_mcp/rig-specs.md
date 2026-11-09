@@ -115,4 +115,6 @@ Values are reported to be snapped to each parameter's step size (community, Core
 
 ## If a build fails
 
-`create_rig` retries writes that don't hold, then reports `mismatches` without saving. The unnamed draft stays loaded. Retry with `resume_draft: true`, or discard it on the pedal.
+`create_rig` retries writes that don't hold, then reports `mismatches` without saving. The unnamed draft stays loaded. Retry with `resume_draft: true`, or discard it on the pedal. `resume_draft` only reuses a draft this server built since it started, so after a restart, discard it first.
+
+`saved` is only true once the pedal lists the new rig. If a warning says the save wasn't confirmed, check `list_rigs` before trying again.

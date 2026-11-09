@@ -30,6 +30,8 @@ class FakePedal:
     def __init__(self, dirty: bool = False, drop_writes_to: str | None = None) -> None:
         self.calls: list[str] = []
         self.drop_writes_to = drop_writes_to
+        self.save_reply: bool | None = True
+        self.lists_saves = True
         chain = {f"ModuleType{n}": 2 for n in range(1, 15)} | {"Routing": 1}
         self.objects = {
             RIGS: {"dirty": dirty, "loadedName": "Mine", "loadedID": "x", "AllRigNames": ["Mine"]},
@@ -60,6 +62,10 @@ class FakePedal:
         path = request.url.path.removeprefix("/api/v1")
         if path.startswith("/object-method"):
             self.calls.append(path)
+            if path.endswith("/saveRigAs"):
+                if self.save_reply is not False and self.lists_saves:
+                    self.objects[RIGS]["AllRigNames"].append(json.loads(request.content)["arguments"][0])
+                return httpx.Response(200, json={"methodReturnValue": self.save_reply})
             return httpx.Response(200, json={"methodReturnValue": True})
         if path.startswith("/object-meta"):
             target = path[len("/object-meta") :]
@@ -181,12 +187,92 @@ def test_apply_rewrites_chain_cleared_by_new_rig_creation():
     assert pedal.objects[CHAIN]["ModuleType1"] == 1
 
 
-def test_resume_draft_retries_on_unnamed_draft_without_new_rig():
-    pedal = FakePedal(dirty=True)
-    pedal.objects[RIGS]["loadedName"] = ""
-    result = apply_rig(make(pedal), SPEC, resume_draft=True, sleep=no_sleep)
+def test_resume_draft_retries_on_the_draft_a_failed_build_left():
+    pedal = FakePedal(drop_writes_to="/Evil/Engine/Patch/Amp")
+    client = make(pedal)
+    assert apply_rig(client, SPEC, sleep=no_sleep)["saved"] is False
+    pedal.drop_writes_to = None
+    pedal.objects[RIGS] |= {"dirty": True, "loadedName": ""}
+    pedal.calls.clear()
+    result = apply_rig(client, SPEC, resume_draft=True, sleep=no_sleep)
     assert result["saved"] is True
     assert not any(c.endswith("makeNewRigConfirm") for c in pedal.calls)
+    assert client.own_draft is False
+
+
+def test_resume_draft_refuses_a_draft_this_server_did_not_build():
+    pedal = FakePedal(dirty=True)
+    pedal.objects[RIGS]["loadedName"] = ""
+    with pytest.raises(HeadRushError, match="only reuses a draft"):
+        apply_rig(make(pedal), SPEC, resume_draft=True, sleep=no_sleep)
+    assert pedal.calls == []
+
+
+def test_resume_draft_refuses_when_the_pedal_omits_the_loaded_name():
+    pedal = FakePedal(dirty=True)
+    del pedal.objects[RIGS]["loadedName"]
+    client = make(pedal)
+    client.own_draft = True
+    with pytest.raises(HeadRushError, match="unnamed draft"):
+        apply_rig(client, SPEC, resume_draft=True, sleep=no_sleep)
+    assert pedal.calls == []
+
+
+def test_apply_refuses_when_the_pedal_omits_the_unsaved_flag():
+    pedal = FakePedal()
+    del pedal.objects[RIGS]["dirty"]
+    with pytest.raises(PolicyError, match="didn't say"):
+        apply_rig(make(pedal), SPEC, sleep=no_sleep)
+    assert pedal.calls == []
+
+
+def test_apply_refuses_when_the_pedal_omits_rig_names():
+    pedal = FakePedal()
+    del pedal.objects[RIGS]["AllRigNames"]
+    with pytest.raises(PolicyError, match="didn't list"):
+        apply_rig(make(pedal), SPEC, sleep=no_sleep)
+    assert pedal.calls == []
+
+
+def test_apply_does_not_report_a_save_the_pedal_never_lists():
+    pedal = FakePedal()
+    pedal.lists_saves = False
+    client = make(pedal)
+    result = apply_rig(client, SPEC, sleep=no_sleep)
+    assert result["saved"] is False
+    assert any("didn't confirm" in w for w in result["warnings"])
+    assert client.own_draft is True
+
+
+def test_apply_reports_a_refused_save():
+    pedal = FakePedal()
+    pedal.save_reply = False
+    result = apply_rig(make(pedal), SPEC, sleep=no_sleep)
+    assert result["saved"] is False
+
+
+def test_save_as_new_waits_for_the_pedal_to_list_the_rig():
+    pedal = FakePedal()
+    pedal.lists_saves = False
+    naps = []
+
+    def appear_on_second_nap(seconds: float) -> None:
+        naps.append(seconds)
+        if len(naps) == 2:
+            pedal.objects[RIGS]["AllRigNames"].append("Later")
+
+    assert make(pedal).save_as_new("Later", appear_on_second_nap) is True
+    assert len(naps) == 2
+
+
+def test_save_as_new_survives_a_failed_check():
+    replies = iter([httpx.Response(500), httpx.Response(200, json={"AllRigNames": ["New"]})])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"methodReturnValue": True}) if request.method == "POST" else next(replies)
+
+    client = HeadRushClient(host="fake", allow_writes=True, transport=httpx.MockTransport(handler))
+    assert client.save_as_new("New", no_sleep) is True
 
 
 def test_resume_draft_refuses_when_a_saved_rig_is_loaded():

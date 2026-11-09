@@ -30,6 +30,7 @@ class Pedal:
         self.missing: set[str] = set()  # Objects that answer 404, like a block with no object.
         self.operations: dict[str, tuple[list, list]] = {}  # Module: names and enabled flags.
         self.puts_before_create: int | None = None
+        self.save_reply = True
         self.arguments: dict[str, list] = {}  # Last arguments by method name.
         chain = {f"ModuleType{n}": 0 for n in range(1, 15)} | {"ModuleType1": 1, "ModuleType3": 2}
         fs = {
@@ -104,6 +105,10 @@ class Pedal:
             self.arguments[path.rsplit("/", 1)[-1]] = json.loads(request.content)["arguments"]
             if path.endswith("/blockPresets"):
                 return httpx.Response(200, json={"methodReturnValue": ["Warm", "+Factory"]})
+            if path.endswith("/saveRigAs"):
+                if self.save_reply:
+                    self.objects[RIGS]["AllRigNames"].append(json.loads(request.content)["arguments"][0])
+                return httpx.Response(200, json={"methodReturnValue": self.save_reply})
             if path.endswith("/createNewSceneState"):
                 self.puts_before_create = len(self.puts)
             if path.endswith(("/operationList", "/operationEnableList")):
@@ -127,6 +132,21 @@ class Pedal:
 
 def connect(pedal: Pedal, allow_writes: bool = True) -> HeadRushClient:
     return HeadRushClient(host="fake", allow_writes=allow_writes, transport=httpx.MockTransport(pedal))
+
+
+def test_save_rig_as_new_reports_a_save_the_pedal_refused(monkeypatch: pytest.MonkeyPatch):
+    instance = Pedal()
+    instance.save_reply = False
+    monkeypatch.setattr(server, "client", connect(instance))
+    with pytest.raises(ToolError, match="didn't confirm"):
+        asyncio.run(server.mcp.call_tool("save_rig_as_new", {"name": "New"}))
+
+
+def test_save_rig_as_new_saves_and_confirms(monkeypatch: pytest.MonkeyPatch):
+    instance = Pedal()
+    monkeypatch.setattr(server, "client", connect(instance))
+    asyncio.run(server.mcp.call_tool("save_rig_as_new", {"name": "New"}))
+    assert "New" in instance.objects[RIGS]["AllRigNames"]
 
 
 @pytest.fixture

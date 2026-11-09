@@ -75,7 +75,8 @@ def apply_rig(
     or the loaded rig has unsaved edits. If anything fails, nothing is saved.
 
     With `resume_draft`, a failed build can be retried on the unnamed draft it left
-    behind. That overwrites the draft, so it's only allowed when no saved rig is loaded.
+    behind. That overwrites the draft, so it needs an unnamed draft that this server built
+    since it started, as the pedal can't tell that apart from a draft someone is working on.
 
     Creating a rig and placing blocks both finish asynchronously and can undo earlier
     writes, so writes are repeated until they hold through a settle period.
@@ -86,8 +87,14 @@ def apply_rig(
     name = spec["name"]
     client.require_new_name(name)
     if resume_draft:
-        if client.get_properties(RIGS).get("loadedName"):
-            raise HeadRushError("resume_draft needs an unnamed draft, but a saved rig is loaded")
+        rigs = client.get_properties(RIGS)
+        if "loadedName" not in rigs or rigs["loadedName"]:
+            raise HeadRushError("resume_draft needs an unnamed draft loaded, and the pedal doesn't report one")
+        if not client.own_draft:
+            raise HeadRushError(
+                "resume_draft only reuses a draft this server built since it started, and there "
+                "isn't one. Discard the draft on the pedal, then run create_rig without it."
+            )
     else:
         client.require_clean()
 
@@ -120,6 +127,7 @@ def apply_rig(
 
     if not resume_draft and client.call(RIGS, "makeNewRigConfirm", [-1]) is False:
         raise HeadRushError("The device refused to create a new rig")
+    client.own_draft = True
 
     expected: list[tuple[str, dict[str, Any]]] = [(CHAIN, chain_values)]
     for entry in spec["blocks"]:
@@ -132,9 +140,14 @@ def apply_rig(
     mismatches = _write_until_stable(client, expected, sleep)
     saved = False
     if save and not mismatches:
-        saved = client.call(RIGS, "saveRigAs", [name, -1]) is not False
+        saved = client.save_as_new(name, sleep)
+    client.own_draft = not saved
     warnings = sorted({w for scene in scenes for w in scene_warnings(client, scene)})
     warnings += auto_assign_warnings(client)
+    if save and not mismatches and not saved:
+        warnings.append(
+            f"The pedal didn't confirm saving '{name}'. Check list_rigs before trying again."
+        )
     return {
         "name": name,
         "saved": saved,

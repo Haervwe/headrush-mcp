@@ -102,6 +102,9 @@ Write tools change the pedal immediately, so a rig can change while you're playi
 - Only allowlisted device calls are possible. Deleting and renaming rigs, setlist changes and cloud actions aren't available, so do those on the pedal or in the Remote Editor.
 - `load_rig` and `create_rig` are refused if the loaded rig has unsaved edits.
 - `save_rig_as_new` and `create_rig` are refused if the name already exists.
+- Those checks refuse if the pedal doesn't report what they need, such as after a firmware change.
+- A new rig only counts as saved once the pedal lists it.
+- Each tool tells your MCP client whether it's read-only or can replace something, for clients that use those hints.
 - `save_loaded_rig` is the only way to overwrite a rig, and it must be given the loaded rig's exact name.
 - Values are checked against the pedal's own schema before writing.
 - `set_slot_block` and `create_rig` refuse blocks that the pedal lists but has no object for, like `ReValver Amp 2` on current firmware. Writing one of those crashed a Core's audio engine in a community test.
@@ -152,6 +155,8 @@ To try one, ask your assistant to `create_rig` with the file's full path.
 | "Writes are disabled" | Set `HEADRUSH_ALLOW_WRITES` to `1` and restart your client |
 | "Has unsaved edits" | Save or discard them on the pedal first |
 | `create_rig` reports mismatches | Nothing was saved. Retry with `resume_draft`, or discard the draft on the pedal |
+| `resume_draft` is refused | It only reuses a draft this server built since it started, so a draft from before a restart, or your own, is left alone. Discard the draft on the pedal, then run `create_rig` without it |
+| "Didn't confirm saving" | The pedal didn't list the new name in time. Check `list_rigs` before trying again, since it may have saved |
 | Can't reach one bank of switches | Changing banks needs a hold set to Bank A/B. See [Reaching both banks](#reaching-both-banks) |
 | A block took a footswitch you didn't assign | Auto Assign Footswitches is on. Reassign it, or turn the setting off on the pedal |
 | A value reads back slightly different | The pedal is reported to snap to the parameter's step size (community, Core). A difference within one step is normal |

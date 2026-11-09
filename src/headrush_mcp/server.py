@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
 
 from .catalog import find_models as _find_models
 from .client import (
@@ -53,21 +54,28 @@ _SWITCH_TYPES = {0: "toggle", 1: "hold", 2: "scene"}
 _SCENE_SIDES = {0: "nochange", 1: "A", 2: "B"}
 _MODE_SCENE = 2
 
+# Hints for MCP clients, such as when to ask before a call. The pedal is a closed system, so
+# nothing is open-world. "Destructive" means a call can replace something with no undo.
+_READ = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+_OVERWRITES = ToolAnnotations(destructive_hint=True, idempotent_hint=True, open_world_hint=False)
+_CHANGES = ToolAnnotations(destructive_hint=True, idempotent_hint=False, open_world_hint=False)
+_NON_DESTRUCTIVE = ToolAnnotations(destructive_hint=False, idempotent_hint=False, open_world_hint=False)
 
-@mcp.tool()
+
+@mcp.tool(annotations=_READ)
 def get_status() -> dict[str, Any]:
     """Get firmware, loaded rig, unsaved-edit flag and DSP load."""
     return client.status()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def list_rigs() -> list[dict[str, str]]:
     """List every rig on the pedal with its id."""
     rigs = client.get_properties(RIGS)
     return [{"id": i, "name": n} for i, n in zip(rigs["AllRigIds"], rigs["AllRigNames"])]
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def list_setlists() -> list[dict[str, Any]]:
     """List setlists with their ids and rig counts."""
     s = client.get_properties(SETLISTS)
@@ -77,14 +85,14 @@ def list_setlists() -> list[dict[str, Any]]:
     ]
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_setlist(setlist_id: str) -> Any:
     """Read one setlist."""
     result = client.call(SETLISTS, "getSetlist", [setlist_id])
     return json.loads(result) if isinstance(result, str) else result
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_current_rig() -> dict[str, Any]:
     """Get the loaded rig's name, routing, parallel mix and block chain."""
     routing = client.get_properties(CHAIN)["Routing"]
@@ -98,13 +106,13 @@ def get_current_rig() -> dict[str, Any]:
     return rig
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def list_routings() -> list[dict[str, Any]]:
     """List signal routings and which chain slots belong to each section."""
     return ROUTINGS
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_block(block: str, display: bool = False) -> dict[str, Any]:
     """Read a block's current values. Numbers are normalized 0-1.
 
@@ -115,19 +123,19 @@ def get_block(block: str, display: bool = False) -> dict[str, Any]:
     return display_values(client, path) if display else client.get_properties(path)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def describe_block(block: str) -> dict[str, Any]:
     """Read a block's parameter schema: types, display ranges and options."""
     return client.get_meta(block_path(block)).get("properties") or {}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def list_blocks() -> list[str]:
     """List block names usable in a chain slot. Names ending in ' 2' are second instances."""
     return client.get_properties(BLOCKS)["ModuleTypes"]
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def find_models(
     query: str = "", kind: str = "", category: str = "", limit: int = 50
 ) -> dict[str, Any]:
@@ -144,7 +152,7 @@ def find_models(
     return _find_models(client, query, kind, category, limit)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def list_block_presets(block: str) -> list[str]:
     """List a block's factory and user presets."""
     return client.call(BLOCKS, "blockPresets", [block])
@@ -202,7 +210,7 @@ def _bank_warnings(
     return warnings
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_footswitches() -> dict[str, Any]:
     """Summarise footswitches, with warnings about switches you can't reach.
 
@@ -244,7 +252,7 @@ def get_footswitches() -> dict[str, Any]:
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_scene(switch: int) -> dict[str, Any]:
     """Read a scene on footswitch 1-6: blocks, doubling, path, presets, color and MIDI out.
 
@@ -255,7 +263,7 @@ def get_scene(switch: int) -> dict[str, Any]:
     return read_scene(client, switch)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_footswitch_settings() -> dict[str, Any]:
     """Read global settings that affect every rig: tuner and looper switch behaviour and more.
 
@@ -270,7 +278,7 @@ def get_footswitch_settings() -> dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_OVERWRITES)
 def set_block_params(block: str, values: dict[str, Any], display: bool = False) -> dict[str, Any]:
     """Change parameters on the loaded rig without saving. Numbers are normalized 0-1.
 
@@ -287,7 +295,7 @@ def _write_values(path: str, values: dict[str, Any], display: bool) -> dict[str,
     return {key: current.get(key) for key in values}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_CHANGES)
 def set_slot_block(slot: int, block: str) -> dict[str, Any]:
     """Put a block in chain slot 1-14 without saving. Its parameters reset shortly afterwards.
 
@@ -305,14 +313,14 @@ def set_slot_block(slot: int, block: str) -> dict[str, Any]:
     return {"chain": client.current_chain(), "warnings": warnings}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_OVERWRITES)
 def set_routing(routing: int) -> dict[str, Any]:
     """Change signal routing without saving. See list_routings for the slot layout."""
     client.set_properties(CHAIN, {"Routing": routing})
     return get_current_rig()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_OVERWRITES)
 def set_mix(values: dict[str, float], display: bool = False) -> dict[str, Any]:
     """Set parallel path mixing without saving.
 
@@ -344,7 +352,7 @@ def _operations(switch: int, module: str) -> list[dict[str, Any]]:
     ]
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def list_footswitch_actions(switch: int, module: str = "") -> dict[str, Any]:
     """List what footswitch 1-6 can control, for choosing set_footswitch's arguments.
 
@@ -367,7 +375,7 @@ def _write_switch(switch: int, config: dict[str, Any]) -> dict[str, Any]:
     return get_footswitches()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_OVERWRITES)
 def set_footswitch(switch: int, module: str, operation: str = "On", name: str = "") -> dict[str, Any]:
     """Make footswitch 1-6 control one module, without saving.
 
@@ -390,7 +398,7 @@ def set_footswitch(switch: int, module: str, operation: str = "On", name: str = 
     return _write_switch(switch, {"module": module, "operation": operation, "name": name})
 
 
-@mcp.tool()
+@mcp.tool(annotations=_OVERWRITES)
 def set_scene(
     switch: int,
     name: str,
@@ -452,7 +460,7 @@ def _ensure_second_state(switch: int) -> None:
     time.sleep(_LABEL_UPDATE_SECONDS)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_OVERWRITES)
 def remove_scene_second_state(switch: int) -> dict[str, Any]:
     """Go back to one state on the scene on footswitch 1-6, without saving."""
     if _require_scene(switch).get(f"SceneNumberOfStates{switch}") == 2:
@@ -462,7 +470,7 @@ def remove_scene_second_state(switch: int) -> dict[str, Any]:
     return read_scene(client, switch)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_CHANGES)
 def activate_scene(switch: int) -> dict[str, Any]:
     """Fire the scene on footswitch 1-6 of the loaded rig, without saving.
 
@@ -475,7 +483,7 @@ def activate_scene(switch: int) -> dict[str, Any]:
     return get_footswitches()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_NON_DESTRUCTIVE)
 def load_rig(rig_id: str, sr_id: str = "") -> dict[str, Any]:
     """Load a rig by id. Refused if the current rig has unsaved edits."""
     client.require_clean()
@@ -483,22 +491,23 @@ def load_rig(rig_id: str, sr_id: str = "") -> dict[str, Any]:
     return client.status()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_NON_DESTRUCTIVE)
 def save_rig_as_new(name: str) -> dict[str, Any]:
     """Save the loaded rig under a new name. Refused if the name already exists."""
     client.require_new_name(name)
-    client.call(RIGS, "saveRigAs", [name, -1])
+    if not client.save_as_new(name):
+        raise HeadRushError(f"The pedal didn't confirm saving '{name}'. Check list_rigs before trying again.")
     return client.status()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_OVERWRITES)
 def save_loaded_rig(expected_name: str) -> dict[str, Any]:
     """Overwrite the loaded rig's saved copy. Refused unless the exact loaded name is given."""
     client.save_loaded_rig(expected_name)
     return client.status()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ)
 def get_rig_spec_format() -> str:
     """Get the create_rig spec format, including footswitches, scenes and routings."""
     return _RIG_SPEC_FORMAT.read_text(encoding="utf-8")
@@ -510,7 +519,7 @@ def rig_spec_format() -> str:
     return get_rig_spec_format()
 
 
-@mcp.tool()
+@mcp.tool(annotations=_NON_DESTRUCTIVE)
 def create_rig(
     spec: dict[str, Any] | None = None,
     spec_path: str | None = None,
@@ -523,7 +532,8 @@ def create_rig(
     scenes. Unknown keys are refused. Refused if the name exists, the loaded rig has unsaved
     edits, or a block has no object on the pedal (such as ReValver Amp 2 and C-Verb 2). If a
     build fails, retry with `resume_draft` to reuse the unnamed draft it left, which
-    overwrites that draft.
+    overwrites that draft. That only works for a draft this server built since it started.
+    `saved` is only true once the pedal lists the new rig.
 
     Numbers count as matching within one step of the parameter's grid, since the pedal snaps
     to it. Check `warnings`: with Auto Assign Footswitches on, the pedal may have put new

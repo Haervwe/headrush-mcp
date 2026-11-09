@@ -228,6 +228,8 @@ class Pedal:
         path = request.url.path.removeprefix("/api/v1")
         if path.startswith("/object-method"):
             self.methods.append(path)
+            if path.endswith("/saveRigAs"):
+                self.objects[RIGS]["AllRigNames"].append(json.loads(request.content)["arguments"][0])
             return httpx.Response(200, json={"methodReturnValue": True})
         if path.startswith("/object-meta"):
             return httpx.Response(200, json={"properties": self.meta.get(path[len("/object-meta") :], {})})

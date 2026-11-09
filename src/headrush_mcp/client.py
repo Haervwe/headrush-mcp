@@ -2,12 +2,15 @@
 
 All device access goes through this class. A POST method call can change the
 live device even when its name sounds harmless, so methods are allowlisted, and
-there is deliberately no way here to delete, overwrite a saved rig or use the cloud.
+there is deliberately no way here to delete or use the cloud. The only way to
+overwrite a saved rig is save_loaded_rig, which must be given the loaded rig's name.
 """
 
 from __future__ import annotations
 
 import re
+import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -24,6 +27,8 @@ SAVE_DIALOG = "/Evil/API/RigSaveDialog"
 FILES = "/Evil/API/FileAccess"
 GENERAL_SETTINGS = "/Evil/Engine/Settings/General"
 EMPTY_SLOT = "Empty Slot"
+_SAVE_CONFIRM_ATTEMPTS = 6
+_SAVE_CONFIRM_SECONDS = 0.5
 
 READ_METHODS = {
     (FILES, "ls"),  # The official editor's file pickers use this to browse folders.
@@ -82,6 +87,7 @@ class HeadRushClient:
         timeout: float = 15.0,
     ) -> None:
         self.allow_writes = allow_writes
+        self.own_draft = False  # Whether an unsaved draft on the pedal was built by this server.
         self._http = httpx.Client(
             base_url=f"http://{host}/api/v1", transport=transport, timeout=timeout
         )
@@ -206,16 +212,43 @@ class HeadRushClient:
     def require_clean(self) -> None:
         """Refuse an action that could discard unsaved edits on the loaded rig."""
         rigs = self.get_properties(RIGS)
-        if rigs.get("dirty"):
+        if rigs.get("dirty") is None:
+            raise PolicyError(
+                "The pedal didn't say whether the loaded rig has unsaved edits, so this was "
+                "refused to protect them. This firmware may not be supported."
+            )
+        if rigs["dirty"]:
             raise PolicyError(
                 f"'{rigs.get('loadedName')}' has unsaved edits, which this could discard. "
                 "Save or discard them on the pedal first."
             )
 
     def require_new_name(self, name: str) -> None:
-        names = self.get_properties(RIGS).get("AllRigNames") or []
+        names = self.get_properties(RIGS).get("AllRigNames")
+        if not isinstance(names, list):
+            raise PolicyError(
+                "The pedal didn't list its rig names, so this was refused to avoid replacing "
+                "one. This firmware may not be supported."
+            )
         if name in names:
             raise PolicyError(f"A rig named '{name}' already exists. Pick another name.")
+
+    def save_as_new(self, name: str, sleep: Callable[[float], None] = time.sleep) -> bool:
+        """Save the loaded rig under a name that's new, and return whether the pedal lists it.
+
+        A successful reply doesn't prove a rig exists. The name wasn't there before, so seeing
+        it now does. HTTP failures while checking only mean it isn't confirmed yet.
+        """
+        if self.call(RIGS, "saveRigAs", [name, -1]) is False:
+            return False
+        for _ in range(_SAVE_CONFIRM_ATTEMPTS):
+            try:
+                if name in (self.get_properties(RIGS).get("AllRigNames") or []):
+                    return True
+            except HeadRushError:
+                pass
+            sleep(_SAVE_CONFIRM_SECONDS)
+        return False
 
     def save_loaded_rig(self, expected_name: str) -> None:
         """Overwrite the loaded rig's saved copy, naming it to prevent saving over the wrong one."""
