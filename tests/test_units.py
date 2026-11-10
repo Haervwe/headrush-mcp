@@ -335,3 +335,10 @@ def test_create_rig_refuses_bad_displayed_values_before_touching_the_pedal(pedal
     with pytest.raises(Exception, match=reason):
         apply_rig(server.client, spec(**entry), sleep=lambda _: None)
     assert pedal.puts == [] and pedal.methods == []
+
+
+def test_load_rig_is_refused_after_an_edit_through_the_server(pedal):
+    asyncio.run(server.mcp.call_tool("set_block_params", {"block": "Amp", "values": {"PreGain": 0.4}}))
+    with pytest.raises(ToolError, match="made through this server"):
+        asyncio.run(server.mcp.call_tool("load_rig", {"rig_id": "other"}))
+    assert not any(m.endswith("loadRigConfirm") for m in pedal.methods)

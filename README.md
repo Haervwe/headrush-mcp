@@ -100,7 +100,7 @@ Write tools change the pedal immediately, so a rig can change while you're playi
 
 - Writes are off until you enable them.
 - Only allowlisted device calls are possible. Deleting and renaming rigs, setlist changes and cloud actions aren't available, so do those on the pedal or in the Remote Editor.
-- `load_rig` and `create_rig` are refused if the loaded rig has unsaved edits.
+- `load_rig` and `create_rig` are refused if the loaded rig has unsaved edits. The pedal doesn't flag edits made over its API, so the server also remembers its own until you save or load a rig. It forgets them when it restarts.
 - `save_rig_as_new` and `create_rig` are refused if the name already exists.
 - Those checks refuse if the pedal doesn't report what they need, such as after a firmware change.
 - A new rig only counts as saved once the pedal lists it.
@@ -154,6 +154,7 @@ To try one, ask your assistant to `create_rig` with the file's full path.
 | Error 401, or the pedal shows a PIN | **Authorize with PIN** is on (firmware 5.0 and later). This server can't pair. Approve the connection on the pedal if it offers that, or turn Authorize with PIN off while you use it |
 | "Writes are disabled" | Set `HEADRUSH_ALLOW_WRITES` to `1` and restart your client |
 | "Has unsaved edits" | Save or discard them on the pedal first |
+| "Unsaved edits made through this server" | Save them with `save_loaded_rig` or `save_rig_as_new`, or load another rig on the pedal to discard them |
 | `create_rig` reports mismatches | Nothing was saved. Retry with `resume_draft`, or discard the draft on the pedal |
 | `resume_draft` is refused | It only reuses a draft this server built since it started, so a draft from before a restart, or your own, is left alone. Discard the draft on the pedal, then run `create_rig` without it |
 | "Didn't confirm saving" | The pedal didn't list the new name in time. Check `list_rigs` before trying again, since it may have saved |

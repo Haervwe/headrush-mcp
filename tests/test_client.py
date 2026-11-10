@@ -165,6 +165,67 @@ def test_save_loaded_rig_requires_the_exact_loaded_name():
     assert pedal.calls[-1].endswith("saveRig")
 
 
+AMP = "/Evil/Engine/Patch/Amp"
+
+
+def test_server_edits_block_loading_until_saved():
+    # The pedal doesn't set `dirty` for edits over its API, so the client must remember them.
+    pedal = FakePedal()
+    client = make(pedal)
+    client.set_properties(AMP, {"Bass": 0.2})
+    with pytest.raises(PolicyError, match="made through this server"):
+        client.require_clean()
+    assert client.status()["unsaved_edits"] is True
+    client.save_loaded_rig("Mine")
+    client.require_clean()
+    assert client.status()["unsaved_edits"] is False
+
+
+def test_firing_a_scene_is_not_an_edit():
+    pedal = FakePedal()
+    pedal.meta[FOOTSWITCH]["SceneActive1"] = {"type": "boolean"}
+    client = make(pedal)
+    client.set_properties(FOOTSWITCH, {"SceneActive1": True})
+    client.require_clean()
+
+
+def test_loading_another_rig_on_the_pedal_drops_server_edits():
+    pedal = FakePedal()
+    client = make(pedal)
+    client.set_properties(AMP, {"Bass": 0.2})
+    pedal.objects[RIGS]["loadedID"] = "other"
+    client.require_clean()
+
+
+def test_loading_a_rig_clears_server_edits():
+    pedal = FakePedal()
+    client = make(pedal)
+    client.set_properties(AMP, {"Bass": 0.2})
+    client.call(RIGS, "loadRigConfirm", ["other", ""])
+    client.require_clean()
+
+
+def test_apply_is_refused_after_server_edits_and_clears_them_once_saved():
+    pedal = FakePedal()
+    client = make(pedal)
+    client.set_properties(AMP, {"Bass": 0.2})
+    with pytest.raises(PolicyError, match="made through this server"):
+        apply_rig(client, SPEC, sleep=no_sleep)
+    client.save_loaded_rig("Mine")
+    assert apply_rig(client, SPEC, sleep=no_sleep)["saved"] is True
+    client.require_clean()
+
+
+def test_an_unconfirmed_save_keeps_server_edits():
+    pedal = FakePedal()
+    pedal.lists_saves = False
+    client = make(pedal)
+    client.set_properties(AMP, {"Bass": 0.2})
+    assert client.save_as_new("New", no_sleep) is False
+    with pytest.raises(PolicyError, match="made through this server"):
+        client.require_clean()
+
+
 def test_save_loaded_rig_needs_writes_enabled():
     pedal = FakePedal()
     with pytest.raises(PolicyError, match="disabled"):

@@ -59,6 +59,10 @@ _FOOTSWITCH_KEY = re.compile(
 # Block names can contain apostrophes and parentheses, as in Sher'ff and IR (1024).
 _READ_PATH = re.compile(r"^/Evil/(API|Cloud|Engine|Gui)(/[\w\-'()]+)*$")
 _BLOCK_PATH = re.compile(r"^/Evil/Engine/Patch/[\w\-'()]+$")
+# Firing a scene changes what's on, not the rig, so it doesn't count as an edit.
+_SCENE_FIRE_KEY = re.compile(r"^SceneActive[1-6]$")
+# Methods that leave the loaded rig matching a saved copy, or with nothing written yet.
+_CLEARS_EDITS = {(RIGS, "loadRigConfirm"), (RIGS, "makeNewRigConfirm"), (RIGS, "saveRig")}
 
 
 class HeadRushError(ToolError):
@@ -88,6 +92,9 @@ class HeadRushClient:
     ) -> None:
         self.allow_writes = allow_writes
         self.own_draft = False  # Whether an unsaved draft on the pedal was built by this server.
+        # The pedal doesn't set `dirty` for edits over this API (Flex Prime, 5.2), so the
+        # loaded rig's id is kept here once this server has changed it without saving.
+        self._edited_rig_id: str | None = None
         self._http = httpx.Client(
             base_url=f"http://{host}/api/v1", transport=transport, timeout=timeout
         )
@@ -168,13 +175,40 @@ class HeadRushClient:
         elif key not in READ_METHODS:
             raise PolicyError(f"Method not allowed: {path}/{method}")
         result = self._send("POST", f"/object-method{path}/{method}", json={"arguments": args})
-        return result.get("methodReturnValue") if isinstance(result, dict) else result
+        value = result.get("methodReturnValue") if isinstance(result, dict) else result
+        if key in _CLEARS_EDITS and value is not False:
+            self._edited_rig_id = None
+        elif key in WRITE_METHODS and key not in _CLEARS_EDITS and key != (RIGS, "saveRigAs"):
+            self._note_edit()  # Such as adding a scene state.
+        return value
 
     def set_properties(self, path: str, values: dict[str, Any]) -> None:
         """Validate values against the device's schema, then write them."""
         self._require_writes()
         self.validate_values(path, values)
         self._send("PUT", f"/object-properties{path}", json=values)
+        if not all(path == FOOTSWITCH and _SCENE_FIRE_KEY.match(k) for k in values):
+            self._note_edit()
+
+    def _note_edit(self) -> None:
+        """Remember that the loaded rig has changed since it was last saved or loaded."""
+        if self._edited_rig_id is None:
+            try:
+                self._edited_rig_id = self.get_properties(RIGS).get("loadedID") or ""
+            except HeadRushError:
+                self._edited_rig_id = ""  # Unknown, so it matches only a rig with no id.
+
+    def has_server_edits(self, rigs: dict[str, Any]) -> bool:
+        """Return whether this server changed the loaded rig without saving it.
+
+        If another rig has been loaded since, such as on the pedal, those edits are gone.
+        """
+        if self._edited_rig_id is None:
+            return False
+        if (rigs.get("loadedID") or "") != self._edited_rig_id:
+            self._edited_rig_id = None
+            return False
+        return True
 
     def validate_values(self, path: str, values: dict[str, Any]) -> None:
         """Refuse values a write would refuse, without writing anything."""
@@ -205,7 +239,7 @@ class HeadRushClient:
             "firmware": gui.get("AppVersion"),
             "loaded_rig": rigs.get("loadedName"),
             "loaded_rig_id": rigs.get("loadedID"),
-            "unsaved_edits": bool(rigs.get("dirty")),
+            "unsaved_edits": bool(rigs.get("dirty")) or self.has_server_edits(rigs),
             "cpu": cpu.get("CPUTimeSmoothed"),
         }
 
@@ -221,6 +255,13 @@ class HeadRushClient:
             raise PolicyError(
                 f"'{rigs.get('loadedName')}' has unsaved edits, which this could discard. "
                 "Save or discard them on the pedal first."
+            )
+        if self.has_server_edits(rigs):
+            raise PolicyError(
+                f"'{rigs.get('loadedName')}' has unsaved edits made through this server, which "
+                "this could discard. The pedal doesn't flag them itself. Save them with "
+                "save_loaded_rig or save_rig_as_new, or load another rig on the pedal to "
+                "discard them."
             )
 
     def require_new_name(self, name: str) -> None:
@@ -244,6 +285,7 @@ class HeadRushClient:
         for _ in range(_SAVE_CONFIRM_ATTEMPTS):
             try:
                 if name in (self.get_properties(RIGS).get("AllRigNames") or []):
+                    self._edited_rig_id = None  # The edits are in the new rig now.
                     return True
             except HeadRushError:
                 pass
