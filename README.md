@@ -100,7 +100,7 @@ Write tools change the pedal immediately, so a rig can change while you're playi
 
 - Writes are off until you enable them.
 - Only allowlisted device calls are possible. Deleting and renaming rigs, setlist changes and cloud actions aren't available, so do those on the pedal or in the Remote Editor.
-- `load_rig` and `create_rig` are refused if the loaded rig has unsaved edits. The pedal doesn't flag edits made over its API, so the server also remembers its own until you save or load a rig. It forgets them when it restarts.
+- `load_rig` and `create_rig` are refused if the loaded rig has unsaved edits. The pedal doesn't flag edits made over its API, so the server also remembers its own until you save or load a rig. It forgets them when it restarts. Edits made on the pedal itself aren't flagged either (Flex Prime, firmware 5.2), so save those before asking your assistant to load or create a rig.
 - `save_rig_as_new` and `create_rig` are refused if the name already exists.
 - Those checks refuse if the pedal doesn't report what they need, such as after a firmware change.
 - A new rig only counts as saved once the pedal lists it.
